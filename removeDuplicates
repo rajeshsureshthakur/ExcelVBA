@@ -1,0 +1,36 @@
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
+public class CSVFileProcessor {
+    public static void main(String[] args) {
+        String csvFile = "input.csv";
+        Map<String, Integer> apiExecutions = new HashMap<>();
+
+        try (BufferedReader br = new BufferedReader(new FileReader(csvFile))) {
+            String line;
+            br.readLine(); // skip header row
+
+            while ((line = br.readLine()) != null) {
+                String[] data = line.split(",");
+                String apiName = getApiName(data[0]);
+                int seconds = Integer.parseInt(data[1]);
+
+                apiExecutions.put(apiName, apiExecutions.getOrDefault(apiName, 0) + seconds);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        for (Map.Entry<String, Integer> entry : apiExecutions.entrySet()) {
+            System.out.println(entry.getKey() + ": " + entry.getValue());
+        }
+    }
+
+    private static String getApiName(String apiPath) {
+        String[] parts = apiPath.split("/");
+        return String.format("/api/%s/reports/balance", parts[2]);
+    }
+}
