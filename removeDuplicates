@@ -48,4 +48,25 @@ public class CSVFileUpdater {
         String[] parts = apiPath.split("/");
         return String.format("/api/%s/reports/balance", parts[2]);
     }
+
+private static String getStandardizedApiName(String apiPath) {
+        String[] parts = apiPath.split("/");
+        StringBuilder sb = new StringBuilder();
+
+        for (int i = 0; i < parts.length; i++) {
+            if (i == 2) {
+                sb.append("u<account>");
+            } else if (i == 3) {
+                continue; // Skip the account number
+            } else {
+                sb.append(parts[i]);
+            }
+            if (i < parts.length - 1) {
+                sb.append("/");
+            }
+        }
+
+        sb.append("/balance");
+        return sb.toString();
+    }
 }
