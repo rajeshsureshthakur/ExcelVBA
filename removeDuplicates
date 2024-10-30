@@ -1,15 +1,19 @@
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
-public class CSVFileProcessor {
+public class CSVFileUpdater {
     public static void main(String[] args) {
-        String csvFile = "input.csv";
+        String inputCsv = "input.csv";
+        String outputCsv = "output.csv";
         Map<String, Integer> apiExecutions = new HashMap<>();
 
-        try (BufferedReader br = new BufferedReader(new FileReader(csvFile))) {
+        // Read the input CSV file and process the data
+        try (BufferedReader br = new BufferedReader(new FileReader(inputCsv))) {
             String line;
             br.readLine(); // skip header row
 
@@ -24,9 +28,20 @@ public class CSVFileProcessor {
             e.printStackTrace();
         }
 
-        for (Map.Entry<String, Integer> entry : apiExecutions.entrySet()) {
-            System.out.println(entry.getKey() + ": " + entry.getValue());
+        // Write the updated data to the output CSV file
+        try (BufferedWriter bw = new BufferedWriter(new FileWriter(outputCsv))) {
+            bw.write("API,Seconds");
+            bw.newLine();
+
+            for (Map.Entry<String, Integer> entry : apiExecutions.entrySet()) {
+                bw.write(entry.getKey() + "," + entry.getValue());
+                bw.newLine();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
         }
+
+        System.out.println("CSV file updated successfully!");
     }
 
     private static String getApiName(String apiPath) {
