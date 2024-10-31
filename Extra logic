@@ -1,0 +1,24 @@
+try {
+                // Find the last comma in the line to separate URL from value
+                int lastCommaIndex = line.lastIndexOf(',');
+                if (lastCommaIndex == -1) {
+                    url = line.trim();
+                } else {
+                    url = line.substring(0, lastCommaIndex).trim();
+                    String numberStr = line.substring(lastCommaIndex + 1).trim();
+
+                    if (!numberStr.isEmpty()) {
+                        try {
+                            // Remove commas from number string before parsing
+                            numberStr = numberStr.replace(",", "");
+                            number = Double.parseDouble(numberStr);
+                        } catch (NumberFormatException e) {
+                            invalidLines.add("Invalid number format in line: " + line);
+                            continue;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                invalidLines.add("Error processing line: " + line);
+                continue;
+            }
