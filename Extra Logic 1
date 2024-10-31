@@ -129,6 +129,44 @@ try {
                 continue;
             }
 
+
+
+
+
+
+// ... (keep all the previous code until the number parsing section in processCSVFile method)
+
+            try {
+                // Clean the entire line first
+                line = line.replaceAll("\\s+", " ").trim();
+                
+                // Split by first comma
+                int firstCommaIndex = line.indexOf(',');
+                if (firstCommaIndex == -1) {
+                    url = line.trim();
+                } else {
+                    url = line.substring(0, firstCommaIndex).trim();
+                    // Get everything after the URL
+                    String valuePart = line.substring(firstCommaIndex + 1).trim();
+                    
+                    if (!valuePart.isEmpty()) {
+                        try {
+                            // Clean the number: remove commas and extra spaces
+                            String cleanNumber = valuePart.replaceAll("[,\\s]+", "");
+                            number = Double.parseDouble(cleanNumber);
+                        } catch (NumberFormatException e) {
+                            System.out.println("Warning: Invalid number format for URL: " + url + ", Value: '" + valuePart + "'");
+                            continue;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                invalidLines.add("Error processing line: " + line);
+                continue;
+            }
+
+            // Rest of the code remains same...
+
             // Rest of your pattern matching code remains the same
             boolean matched = false;
             for (PatternMatcher matcher : patterns) {
