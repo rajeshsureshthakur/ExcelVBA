@@ -10,75 +10,104 @@ public class URLPatternAggregator {
         private final double sum;
         private final int count;
         private final Set<String> uniqueIds;
+        private final Set<String> uniquePaths;
 
-        public AggregationResult(String originalPattern, String replacementPattern, double sum, int count, Set<String> uniqueIds) {
+        public AggregationResult(String originalPattern, String replacementPattern, double sum, int count, 
+                               Set<String> uniqueIds, Set<String> uniquePaths) {
             this.originalPattern = originalPattern;
             this.replacementPattern = replacementPattern;
             this.sum = sum;
             this.count = count;
             this.uniqueIds = uniqueIds;
+            this.uniquePaths = uniquePaths;
         }
 
         @Override
         public String toString() {
-            return String.format("Pattern: %s -> %s, Sum: %.2f, Count: %d, Unique IDs: %s", 
-                originalPattern, replacementPattern, sum, count, uniqueIds);
+            return String.format("Pattern: %s -> %s, Sum: %.2f, Count: %d, Unique IDs: %s, Paths: %s", 
+                originalPattern, replacementPattern, sum, count, uniqueIds, uniquePaths);
         }
     }
 
     public static class PatternMatcher {
         private final Pattern pattern;
         private final String replacement;
+        private final boolean hasExtendedPath;
 
-        public PatternMatcher(String regex, String replacement) {
+        public PatternMatcher(String regex, String replacement, boolean hasExtendedPath) {
             this.pattern = Pattern.compile(regex);
             this.replacement = replacement;
+            this.hasExtendedPath = hasExtendedPath;
         }
 
         public boolean matches(String input) {
             return pattern.matcher(input).matches();
         }
 
-        public String extractBasePath(String input) {
+        public MatchResult extractComponents(String input) {
             Matcher matcher = pattern.matcher(input);
             if (matcher.matches()) {
-                return input.substring(0, input.lastIndexOf('/'));
+                String id = matcher.group(1);
+                String extendedPath = hasExtendedPath && matcher.groupCount() > 1 ? matcher.group(2) : "";
+                String basePath = input.substring(0, input.indexOf(id));
+                return new MatchResult(basePath, id, extendedPath);
             }
-            return input;
+            return null;
         }
 
-        public String extractId(String input) {
-            Matcher matcher = pattern.matcher(input);
-            if (matcher.matches() && matcher.groupCount() >= 1) {
-                return matcher.group(1);
-            }
-            return "";
+        public String getReplacement(String basePath, String extendedPath) {
+            return basePath + replacement + (extendedPath.isEmpty() ? "" : "/" + extendedPath);
         }
+    }
 
-        public String getReplacement(String basePath) {
-            return basePath + "/" + replacement;
+    public static class MatchResult {
+        public final String basePath;
+        public final String id;
+        public final String extendedPath;
+
+        public MatchResult(String basePath, String id, String extendedPath) {
+            this.basePath = basePath;
+            this.id = id;
+            this.extendedPath = extendedPath;
         }
     }
 
     public static Map<String, AggregationResult> processCSVFile(String inputFile, String outputFile) throws IOException {
         // Define pattern matchers for different URL patterns
         List<PatternMatcher> patterns = Arrays.asList(
+            // Pattern for URLs with additional path after ID
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9]+)/([a-zA-Z0-9-/]+)$",
+                "<Common>",
+                true
+            ),
+            // Pattern for URLs ending with ID
             new PatternMatcher(
                 "/api/ui/report-part-fine/play/([a-zA-Z0-9]+)$",
-                "<Common>"
+                "<Common>",
+                false
             ),
+            // Pattern for schedule URLs with extended path
+            new PatternMatcher(
+                "/api/ui/report-task-ok/schedule/([a-zA-Z0-9]+)/([a-zA-Z0-9-/]+)$",
+                "<Common>",
+                true
+            ),
+            // Pattern for schedule URLs ending with ID
             new PatternMatcher(
                 "/api/ui/report-task-ok/schedule/([a-zA-Z0-9]+)$",
-                "<Common>"
+                "<Common>",
+                false
             ),
+            // Generic catch-all pattern with extended path
             new PatternMatcher(
-                "/api/ui/([a-zA-Z0-9-]+/)*([a-zA-Z0-9]+)$",
-                "<Common>"
+                "/api/ui/([a-zA-Z0-9-]+/)*([a-zA-Z0-9]+)/([a-zA-Z0-9-/]+)$",
+                "<Common>",
+                true
             )
         );
 
         Map<String, AggregationResult> results = new HashMap<>();
-        Map<String, Set<String>> uniqueIds = new HashMap<>();
 
         // Read and process input file
         List<String> lines = Files.readAllLines(Paths.get(inputFile));
@@ -105,16 +134,17 @@ public class URLPatternAggregator {
             // Try each pattern matcher
             for (PatternMatcher matcher : patterns) {
                 if (matcher.matches(url)) {
-                    String basePath = matcher.extractBasePath(url);
-                    String id = matcher.extractId(url);
-                    String replacementPattern = matcher.getReplacement(basePath);
+                    MatchResult match = matcher.extractComponents(url);
+                    if (match == null) continue;
 
-                    // Store unique IDs for this pattern
-                    uniqueIds.computeIfAbsent(basePath, k -> new HashSet<>()).add(id);
+                    String replacementPattern = matcher.getReplacement(match.basePath, match.extendedPath);
+                    String groupKey = match.basePath + (match.extendedPath.isEmpty() ? "" : "/" + match.extendedPath);
 
                     // Update aggregation results
-                    results.merge(basePath,
-                        new AggregationResult(url, replacementPattern, number, 1, new HashSet<>(Arrays.asList(id))),
+                    results.merge(groupKey,
+                        new AggregationResult(url, replacementPattern, number, 1, 
+                            new HashSet<>(Arrays.asList(match.id)),
+                            new HashSet<>(Arrays.asList(match.extendedPath))),
                         (existing, newValue) -> new AggregationResult(
                             existing.originalPattern,
                             existing.replacementPattern,
@@ -123,9 +153,13 @@ public class URLPatternAggregator {
                             new HashSet<String>() {{
                                 addAll(existing.uniqueIds);
                                 addAll(newValue.uniqueIds);
+                            }},
+                            new HashSet<String>() {{
+                                addAll(existing.uniquePaths);
+                                addAll(newValue.uniquePaths);
                             }}
                         ));
-                    break; // Stop after first matching pattern
+                    break;
                 }
             }
         }
@@ -139,16 +173,17 @@ public class URLPatternAggregator {
     private static void writeResults(String outputFile, Map<String, AggregationResult> results) throws IOException {
         try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
             // Write header
-            writer.write("Base Pattern,Replacement Pattern,Sum,Count,Unique IDs\n");
+            writer.write("Base Pattern,Replacement Pattern,Sum,Count,Unique IDs,Extended Paths\n");
 
             // Write each aggregated result
             for (AggregationResult result : results.values()) {
-                writer.write(String.format("%s,%s,%.2f,%d,%s\n",
+                writer.write(String.format("%s,%s,%.2f,%d,%s,%s\n",
                     escapeCsvField(result.originalPattern),
                     escapeCsvField(result.replacementPattern),
                     result.sum,
                     result.count,
-                    escapeCsvField(String.join(", ", result.uniqueIds))
+                    escapeCsvField(String.join(", ", result.uniqueIds)),
+                    escapeCsvField(String.join(", ", result.uniquePaths))
                 ));
             }
 
@@ -159,7 +194,7 @@ public class URLPatternAggregator {
             int totalCount = results.values().stream()
                 .mapToInt(r -> r.count)
                 .sum();
-            writer.write(String.format("\nTotals,,%,.2f,%d,\n", totalSum, totalCount));
+            writer.write(String.format("\nTotals,,%,.2f,%d,,\n", totalSum, totalCount));
         }
     }
 
@@ -197,11 +232,11 @@ public class URLPatternAggregator {
     private static void createSampleInputFile(String filename) throws IOException {
         try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(filename))) {
             writer.write("URL,Number\n");
-            writer.write("/api/ui/report-part-fine/play/1456ab21323df,100.50\n");
+            writer.write("/api/ui/report-part-fine/play/1456ab21323df/time,100.50\n");
             writer.write("/api/ui/report-part-fine/play/789xyz123,75.25\n");
-            writer.write("/api/ui/report-task-ok/schedule/456def789,200.75\n");
-            writer.write("/api/ui/custom/section/123abc456,150.00\n");
-            writer.write("/api/ui/report-part-fine/play/999zzz888,125.50\n");
+            writer.write("/api/ui/report-part-fine/play/456def789/details,200.75\n");
+            writer.write("/api/ui/report-task-ok/schedule/123abc456/status,150.00\n");
+            writer.write("/api/ui/report-part-fine/play/999zzz888/time,125.50\n");
         }
     }
 }
