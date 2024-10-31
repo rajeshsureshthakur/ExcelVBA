@@ -95,3 +95,41 @@ try {
         writeResults(outputFile, results, skippedUrls, invalidLines, allPathVariants);
         return results;
     }
+
+
+
+
+
+
+// ... (keep all the previous code until the number parsing section in processCSVFile method)
+
+            try {
+                // First split using first comma to get URL
+                int firstCommaIndex = line.indexOf(',');
+                if (firstCommaIndex == -1) {
+                    url = line.trim();
+                } else {
+                    url = line.substring(0, firstCommaIndex).trim();
+                    // Get everything after the URL
+                    String valuePart = line.substring(firstCommaIndex + 1).trim();
+                    
+                    if (!valuePart.isEmpty()) {
+                        try {
+                            // Remove any commas from the number
+                            String cleanNumber = valuePart.replace(",", "");
+                            number = Double.parseDouble(cleanNumber);
+                        } catch (NumberFormatException e) {
+                            System.out.println("Warning: Invalid number format in line: " + line);
+                            continue;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                invalidLines.add("Error processing line: " + line);
+                continue;
+            }
+
+            // Rest of your pattern matching code remains the same
+            boolean matched = false;
+            for (PatternMatcher matcher : patterns) {
+                // ... (rest of the code remains same)
