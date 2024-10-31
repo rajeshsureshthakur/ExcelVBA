@@ -1,6 +1,7 @@
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.regex.*;
 
 public class URLPatternAggregator {
     public static class AggregationResult {
@@ -8,24 +9,76 @@ public class URLPatternAggregator {
         private final String replacementPattern;
         private final double sum;
         private final int count;
+        private final Set<String> uniqueIds;
 
-        public AggregationResult(String originalPattern, String replacementPattern, double sum, int count) {
+        public AggregationResult(String originalPattern, String replacementPattern, double sum, int count, Set<String> uniqueIds) {
             this.originalPattern = originalPattern;
             this.replacementPattern = replacementPattern;
             this.sum = sum;
             this.count = count;
+            this.uniqueIds = uniqueIds;
         }
 
         @Override
         public String toString() {
-            return String.format("Pattern: %s -> %s, Sum: %.2f, Count: %d", 
-                originalPattern, replacementPattern, sum, count);
+            return String.format("Pattern: %s -> %s, Sum: %.2f, Count: %d, Unique IDs: %s", 
+                originalPattern, replacementPattern, sum, count, uniqueIds);
+        }
+    }
+
+    public static class PatternMatcher {
+        private final Pattern pattern;
+        private final String replacement;
+
+        public PatternMatcher(String regex, String replacement) {
+            this.pattern = Pattern.compile(regex);
+            this.replacement = replacement;
+        }
+
+        public boolean matches(String input) {
+            return pattern.matcher(input).matches();
+        }
+
+        public String extractBasePath(String input) {
+            Matcher matcher = pattern.matcher(input);
+            if (matcher.matches()) {
+                return input.substring(0, input.lastIndexOf('/'));
+            }
+            return input;
+        }
+
+        public String extractId(String input) {
+            Matcher matcher = pattern.matcher(input);
+            if (matcher.matches() && matcher.groupCount() >= 1) {
+                return matcher.group(1);
+            }
+            return "";
+        }
+
+        public String getReplacement(String basePath) {
+            return basePath + "/" + replacement;
         }
     }
 
     public static Map<String, AggregationResult> processCSVFile(String inputFile, String outputFile) throws IOException {
-        // Map to store base patterns and their sums
+        // Define pattern matchers for different URL patterns
+        List<PatternMatcher> patterns = Arrays.asList(
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9]+)$",
+                "<Common>"
+            ),
+            new PatternMatcher(
+                "/api/ui/report-task-ok/schedule/([a-zA-Z0-9]+)$",
+                "<Common>"
+            ),
+            new PatternMatcher(
+                "/api/ui/([a-zA-Z0-9-]+/)*([a-zA-Z0-9]+)$",
+                "<Common>"
+            )
+        );
+
         Map<String, AggregationResult> results = new HashMap<>();
+        Map<String, Set<String>> uniqueIds = new HashMap<>();
 
         // Read and process input file
         List<String> lines = Files.readAllLines(Paths.get(inputFile));
@@ -49,19 +102,32 @@ public class URLPatternAggregator {
                 continue;
             }
 
-            // Get base pattern by removing the random ID
-            String basePattern = getBasePattern(url);
-            String replacementPattern = basePattern + "/<Common>";
+            // Try each pattern matcher
+            for (PatternMatcher matcher : patterns) {
+                if (matcher.matches(url)) {
+                    String basePath = matcher.extractBasePath(url);
+                    String id = matcher.extractId(url);
+                    String replacementPattern = matcher.getReplacement(basePath);
 
-            // Update aggregation results
-            results.merge(basePattern,
-                new AggregationResult(url, replacementPattern, number, 1),
-                (existing, newValue) -> new AggregationResult(
-                    existing.originalPattern,
-                    existing.replacementPattern,
-                    existing.sum + number,
-                    existing.count + 1
-                ));
+                    // Store unique IDs for this pattern
+                    uniqueIds.computeIfAbsent(basePath, k -> new HashSet<>()).add(id);
+
+                    // Update aggregation results
+                    results.merge(basePath,
+                        new AggregationResult(url, replacementPattern, number, 1, new HashSet<>(Arrays.asList(id))),
+                        (existing, newValue) -> new AggregationResult(
+                            existing.originalPattern,
+                            existing.replacementPattern,
+                            existing.sum + number,
+                            existing.count + 1,
+                            new HashSet<String>() {{
+                                addAll(existing.uniqueIds);
+                                addAll(newValue.uniqueIds);
+                            }}
+                        ));
+                    break; // Stop after first matching pattern
+                }
+            }
         }
 
         // Write results to output file
@@ -70,31 +136,30 @@ public class URLPatternAggregator {
         return results;
     }
 
-    private static String getBasePattern(String url) {
-        int lastSlashIndex = url.lastIndexOf('/');
-        return lastSlashIndex > 0 ? url.substring(0, lastSlashIndex) : url;
-    }
-
     private static void writeResults(String outputFile, Map<String, AggregationResult> results) throws IOException {
         try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
             // Write header
-            writer.write("Original Pattern,Replacement Pattern,Sum,Count\n");
+            writer.write("Base Pattern,Replacement Pattern,Sum,Count,Unique IDs\n");
 
             // Write each aggregated result
             for (AggregationResult result : results.values()) {
-                writer.write(String.format("%s,%s,%.2f,%d\n",
+                writer.write(String.format("%s,%s,%.2f,%d,%s\n",
                     escapeCsvField(result.originalPattern),
                     escapeCsvField(result.replacementPattern),
                     result.sum,
-                    result.count
+                    result.count,
+                    escapeCsvField(String.join(", ", result.uniqueIds))
                 ));
             }
 
-            // Write total sum
+            // Write totals
             double totalSum = results.values().stream()
                 .mapToDouble(r -> r.sum)
                 .sum();
-            writer.write(String.format("\nTotal Sum,%.2f\n", totalSum));
+            int totalCount = results.values().stream()
+                .mapToInt(r -> r.count)
+                .sum();
+            writer.write(String.format("\nTotals,,%,.2f,%d,\n", totalSum, totalCount));
         }
     }
 
@@ -134,8 +199,8 @@ public class URLPatternAggregator {
             writer.write("URL,Number\n");
             writer.write("/api/ui/report-part-fine/play/1456ab21323df,100.50\n");
             writer.write("/api/ui/report-part-fine/play/789xyz123,75.25\n");
-            writer.write("/api/ui/report-part-fine/play/456def789,200.75\n");
-            writer.write("/api/ui/report-task-ok/schedule/123abc456,150.00\n");
+            writer.write("/api/ui/report-task-ok/schedule/456def789,200.75\n");
+            writer.write("/api/ui/custom/section/123abc456,150.00\n");
             writer.write("/api/ui/report-part-fine/play/999zzz888,125.50\n");
         }
     }
