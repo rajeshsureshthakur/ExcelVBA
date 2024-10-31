@@ -1,0 +1,97 @@
+try {
+                // Split line by comma
+                String[] parts = line.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)", -1);
+                
+                // Get URL from first part
+                url = parts[0].trim();
+                
+                // Get and process number from last part
+                if (parts.length >= 2) {
+                    String numberStr = parts[parts.length - 1].trim();
+                    if (!numberStr.isEmpty()) {
+                        // Remove any commas and spaces from the number
+                        numberStr = numberStr.replaceAll(",", "").trim();
+                        try {
+                            number = Double.parseDouble(numberStr);
+                        } catch (NumberFormatException e) {
+                            System.out.println("Warning: Invalid number format '" + numberStr + "' for URL: " + url + ". Using 0.0");
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                invalidLines.add("Error processing line: " + line);
+                continue;
+            }
+
+            // Rest of your existing processing code
+            boolean matched = false;
+            for (PatternMatcher matcher : patterns) {
+                if (matcher.matches(url)) {
+                    matched = true;
+                    MatchResult match = matcher.extractComponents(url);
+                    if (match == null) continue;
+
+                    if (!match.pathVariant.isEmpty()) {
+                        allPathVariants.add(match.pathVariant);
+                    }
+
+                    String replacementPattern = matcher.getReplacement(match);
+
+                    Set<String> ids = new HashSet<>();
+                    if (!match.id.isEmpty()) ids.add(match.id);
+                    if (!match.secondId.isEmpty()) ids.add(match.secondId);
+
+                    Set<String> pathVariants = new HashSet<>();
+                    if (!match.pathVariant.isEmpty()) {
+                        pathVariants.add(match.pathVariant);
+                    }
+
+                    Set<String> digits = new HashSet<>();
+                    if (!match.digits.isEmpty()) {
+                        digits.add(match.digits);
+                    }
+
+                    AggregationResult newResult = new AggregationResult(
+                        url, 
+                        replacementPattern, 
+                        number, 
+                        1, 
+                        ids,
+                        pathVariants,
+                        digits
+                    );
+
+                    results.merge(
+                        replacementPattern,
+                        newResult,
+                        (existing, newValue) -> new AggregationResult(
+                            existing.originalPattern,
+                            existing.replacementPattern,
+                            existing.sum + (newValue.sum >= 0 ? newValue.sum : 0),
+                            existing.count + 1,
+                            new HashSet<String>() {{
+                                addAll(existing.allIds);
+                                addAll(newValue.allIds);
+                            }},
+                            new HashSet<String>() {{
+                                addAll(existing.pathVariants);
+                                addAll(newValue.pathVariants);
+                            }},
+                            new HashSet<String>() {{
+                                addAll(existing.digits);
+                                addAll(newValue.digits);
+                            }}
+                        )
+                    );
+                    break;
+                }
+            }
+            
+            if (!matched) {
+                skippedUrls.add(url);
+            }
+        }
+
+        writeResults(outputFile, results, skippedUrls, invalidLines, allPathVariants);
+        return results;
+    }
