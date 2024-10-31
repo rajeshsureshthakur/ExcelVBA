@@ -1,0 +1,96 @@
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class CSVFileProcessorAndWriterV2 {
+    public static void main(String[] args) {
+        String inputCsv = "input.csv";
+        String outputCsv = "output.csv";
+        Map<String, Integer> apiExecutions = new HashMap<>();
+
+        processCSV(inputCsv, apiExecutions);
+        writeToCSV(outputCsv, apiExecutions);
+    }
+
+    public static void processCSV(String inputCsv, Map<String, Integer> apiExecutions) {
+        try (BufferedReader br = new BufferedReader(new FileReader(inputCsv))) {
+            String headerLine = br.readLine(); // Get the header line
+            String[] headerColumns = headerLine.split(",");
+
+            int apiNameColumn = -1;
+            int executionColumn = -1;
+
+            // Find the indices of the API name and execution count columns
+            for (int i = 0; i < headerColumns.length; i++) {
+                if (headerColumns[i].equalsIgnoreCase("userRequestedUri.keyword: Descending")) {
+                    apiNameColumn = i;
+                } else if (headerColumns[i].equalsIgnoreCase("Seconds")) {
+                    executionColumn = i;
+                }
+            }
+
+            if (apiNameColumn == -1 || executionColumn == -1) {
+                throw new IllegalArgumentException("CSV file does not contain the required columns: userRequestedUri.keyword: Descending and Seconds");
+            }
+
+            String line;
+            while ((line = br.readLine()) != null) {
+                String[] data = line.split(",");
+                String apiName = getStandardizedApiName(data[apiNameColumn]);
+
+                // Handle multiple patterns in a single while loop
+                while (apiName == null) {
+                    apiName = getStandardizedApiName(data[apiNameColumn]);
+                }
+
+                int seconds = Integer.parseInt(data[executionColumn]);
+
+                apiExecutions.put(apiName, apiExecutions.getOrDefault(apiName, 0) + seconds);
+            }
+        } catch (IOException | NumberFormatException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static void writeToCSV(String outputCsv, Map<String, Integer> apiExecutions) {
+        try (BufferedWriter bw = new BufferedWriter(new FileWriter(outputCsv))) {
+            // Write the header row
+            bw.write("API,Seconds");
+            bw.newLine();
+
+            for (Map.Entry<String, Integer> entry : apiExecutions.entrySet()) {
+                bw.write(entry.getKey() + "," + entry.getValue());
+                bw.newLine();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        System.out.println("CSV file updated successfully!");
+    }
+
+    private static String getStandardizedApiName(String apiPath) {
+        // Define multiple patterns to handle different API name formats
+        Pattern[] patterns = {
+            Pattern.compile("/[a-z]/[a-z]/[0-9]+/[a-z]"),
+            Pattern.compile("/[a-z]/[0-9]+/[a-z]/[a-z]"),
+            Pattern.compile("/[a-z]/[a-z]/[a-z]/[0-9]+")
+        };
+
+        for (Pattern pattern : patterns) {
+            Matcher matcher = pattern.matcher(apiPath);
+            if (matcher.find()) {
+                return matcher.group().replaceAll("/[0-9]+", "/<number>");
+            }
+        }
+
+        // If no pattern matches, return null to indicate an invalid API name
+        return null;
+    }
+}
