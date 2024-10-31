@@ -1,0 +1,142 @@
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+
+public class URLPatternAggregator {
+    public static class AggregationResult {
+        private final String originalPattern;
+        private final String replacementPattern;
+        private final double sum;
+        private final int count;
+
+        public AggregationResult(String originalPattern, String replacementPattern, double sum, int count) {
+            this.originalPattern = originalPattern;
+            this.replacementPattern = replacementPattern;
+            this.sum = sum;
+            this.count = count;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("Pattern: %s -> %s, Sum: %.2f, Count: %d", 
+                originalPattern, replacementPattern, sum, count);
+        }
+    }
+
+    public static Map<String, AggregationResult> processCSVFile(String inputFile, String outputFile) throws IOException {
+        // Map to store base patterns and their sums
+        Map<String, AggregationResult> results = new HashMap<>();
+
+        // Read and process input file
+        List<String> lines = Files.readAllLines(Paths.get(inputFile));
+        boolean isFirstLine = true;
+
+        for (String line : lines) {
+            if (isFirstLine) {
+                isFirstLine = false;
+                continue;
+            }
+
+            String[] parts = line.split(",", 2);
+            if (parts.length != 2) continue;
+
+            String url = parts[0].trim();
+            double number;
+            try {
+                number = Double.parseDouble(parts[1].trim());
+            } catch (NumberFormatException e) {
+                System.err.println("Invalid number format in line: " + line);
+                continue;
+            }
+
+            // Get base pattern by removing the random ID
+            String basePattern = getBasePattern(url);
+            String replacementPattern = basePattern + "/<Common>";
+
+            // Update aggregation results
+            results.merge(basePattern,
+                new AggregationResult(url, replacementPattern, number, 1),
+                (existing, newValue) -> new AggregationResult(
+                    existing.originalPattern,
+                    existing.replacementPattern,
+                    existing.sum + number,
+                    existing.count + 1
+                ));
+        }
+
+        // Write results to output file
+        writeResults(outputFile, results);
+
+        return results;
+    }
+
+    private static String getBasePattern(String url) {
+        int lastSlashIndex = url.lastIndexOf('/');
+        return lastSlashIndex > 0 ? url.substring(0, lastSlashIndex) : url;
+    }
+
+    private static void writeResults(String outputFile, Map<String, AggregationResult> results) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
+            // Write header
+            writer.write("Original Pattern,Replacement Pattern,Sum,Count\n");
+
+            // Write each aggregated result
+            for (AggregationResult result : results.values()) {
+                writer.write(String.format("%s,%s,%.2f,%d\n",
+                    escapeCsvField(result.originalPattern),
+                    escapeCsvField(result.replacementPattern),
+                    result.sum,
+                    result.count
+                ));
+            }
+
+            // Write total sum
+            double totalSum = results.values().stream()
+                .mapToDouble(r -> r.sum)
+                .sum();
+            writer.write(String.format("\nTotal Sum,%.2f\n", totalSum));
+        }
+    }
+
+    private static String escapeCsvField(String field) {
+        if (field.contains(",") || field.contains("\"") || field.contains("\n")) {
+            return "\"" + field.replace("\"", "\"\"") + "\"";
+        }
+        return field;
+    }
+
+    public static void main(String[] args) {
+        try {
+            // Example usage
+            String inputFile = "input.csv";
+            String outputFile = "aggregated_output.csv";
+            
+            // Create sample input file for demonstration
+            createSampleInputFile(inputFile);
+            
+            // Process the file
+            Map<String, AggregationResult> results = processCSVFile(inputFile, outputFile);
+            
+            // Print results to console
+            System.out.println("Aggregation Results:");
+            results.values().forEach(System.out::println);
+            
+            System.out.println("\nProcessing complete. Check " + outputFile + " for detailed results.");
+            
+        } catch (IOException e) {
+            System.err.println("Error processing files: " + e.getMessage());
+        }
+    }
+
+    // Helper method to create sample input file
+    private static void createSampleInputFile(String filename) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(filename))) {
+            writer.write("URL,Number\n");
+            writer.write("/api/ui/report-part-fine/play/1456ab21323df,100.50\n");
+            writer.write("/api/ui/report-part-fine/play/789xyz123,75.25\n");
+            writer.write("/api/ui/report-part-fine/play/456def789,200.75\n");
+            writer.write("/api/ui/report-task-ok/schedule/123abc456,150.00\n");
+            writer.write("/api/ui/report-part-fine/play/999zzz888,125.50\n");
+        }
+    }
+}
