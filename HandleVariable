@@ -1,0 +1,280 @@
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.regex.*;
+
+public class URLPatternAggregator {
+    public static class AggregationResult {
+        private final String originalPattern;
+        private final String replacementPattern;
+        private final double sum;
+        private final int count;
+        private final Set<String> allIds;
+        private final Set<String> pathVariants;
+
+        public AggregationResult(String originalPattern, String replacementPattern, double sum, int count, 
+                               Set<String> allIds, Set<String> pathVariants) {
+            this.originalPattern = originalPattern;
+            this.replacementPattern = replacementPattern;
+            this.sum = sum;
+            this.count = count;
+            this.allIds = allIds;
+            this.pathVariants = pathVariants;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("Pattern: %s -> %s, Sum: %.2f, Count: %d, IDs: %s, Path Variants: %s", 
+                originalPattern, replacementPattern, sum, count, allIds, pathVariants);
+        }
+    }
+
+    public static class PatternMatcher {
+        private final Pattern pattern;
+        private final String replacement;
+        private final Pattern idValidator;
+        private final boolean hasPathVariant;
+
+        public PatternMatcher(String regex, String replacement, boolean hasPathVariant) {
+            this.pattern = Pattern.compile(regex);
+            this.replacement = replacement;
+            this.hasPathVariant = hasPathVariant;
+            this.idValidator = Pattern.compile("[a-zA-Z0-9]{8,}");
+        }
+
+        public boolean matches(String input) {
+            Matcher matcher = pattern.matcher(input);
+            if (matcher.matches()) {
+                // Validate the ID
+                String id = matcher.group(1);
+                return idValidator.matcher(id).matches() && id.matches(".*\\d+.*");
+            }
+            return false;
+        }
+
+        public MatchResult extractComponents(String input) {
+            Matcher matcher = pattern.matcher(input);
+            if (matcher.matches()) {
+                String id = matcher.group(1);
+                String pathVariant = hasPathVariant && matcher.groupCount() > 1 ? matcher.group(2) : "";
+                String secondId = hasPathVariant && matcher.groupCount() > 2 ? matcher.group(3) : "";
+                return new MatchResult(input, id, pathVariant, secondId);
+            }
+            return null;
+        }
+
+        public String getReplacement(String originalUrl, MatchResult match) {
+            String result = originalUrl.replace(match.id, "<Common>");
+            if (!match.secondId.isEmpty()) {
+                result = result.replace(match.secondId, "<Common>");
+            }
+            // Keep the path variant in the replacement pattern
+            return result;
+        }
+    }
+
+    public static class MatchResult {
+        public final String originalUrl;
+        public final String id;
+        public final String pathVariant;
+        public final String secondId;
+
+        public MatchResult(String originalUrl, String id, String pathVariant, String secondId) {
+            this.originalUrl = originalUrl;
+            this.id = id;
+            this.pathVariant = pathVariant;
+            this.secondId = secondId;
+        }
+    }
+
+    public static Map<String, AggregationResult> processCSVFile(String inputFile, String outputFile) throws IOException {
+        // Define pattern matchers for different URL patterns
+        List<PatternMatcher> patterns = Arrays.asList(
+            // Pattern for URLs with ID and variable path segment and second ID
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9]+)/([a-zA-Z]+)/([a-zA-Z0-9]+)$",
+                "<Common>",
+                true
+            ),
+            // Pattern for URLs with ID and variable path segment
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9]+)/([a-zA-Z]+)/?$",
+                "<Common>",
+                true
+            ),
+            // Pattern for URLs with just ID
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9]+)$",
+                "<Common>",
+                false
+            )
+        );
+
+        Map<String, AggregationResult> results = new HashMap<>();
+        List<String> skippedUrls = new ArrayList<>();
+        
+        // Track path variants for analysis
+        Set<String> allPathVariants = new HashSet<>();
+
+        // Read and process input file
+        List<String> lines = Files.readAllLines(Paths.get(inputFile));
+        boolean isFirstLine = true;
+
+        for (String line : lines) {
+            if (isFirstLine) {
+                isFirstLine = false;
+                continue;
+            }
+
+            String[] parts = line.split(",", 2);
+            if (parts.length != 2) continue;
+
+            String url = parts[0].trim();
+            double number;
+            try {
+                number = Double.parseDouble(parts[1].trim());
+            } catch (NumberFormatException e) {
+                System.err.println("Invalid number format in line: " + line);
+                continue;
+            }
+
+            boolean matched = false;
+            for (PatternMatcher matcher : patterns) {
+                if (matcher.matches(url)) {
+                    matched = true;
+                    MatchResult match = matcher.extractComponents(url);
+                    if (match == null) continue;
+
+                    if (!match.pathVariant.isEmpty()) {
+                        allPathVariants.add(match.pathVariant);
+                    }
+
+                    String replacementPattern = matcher.getReplacement(match.originalUrl, match);
+                    String basePattern = replacementPattern.replaceFirst("/[a-zA-Z]+/", "/<PathVar>/");
+
+                    // Create sets for IDs and path variants
+                    Set<String> ids = new HashSet<>();
+                    ids.add(match.id);
+                    if (!match.secondId.isEmpty()) {
+                        ids.add(match.secondId);
+                    }
+                    Set<String> pathVariants = new HashSet<>();
+                    if (!match.pathVariant.isEmpty()) {
+                        pathVariants.add(match.pathVariant);
+                    }
+
+                    // Update aggregation results
+                    results.merge(basePattern,
+                        new AggregationResult(url, replacementPattern, number, 1, ids, pathVariants),
+                        (existing, newValue) -> new AggregationResult(
+                            existing.originalPattern,
+                            existing.replacementPattern,
+                            existing.sum + number,
+                            existing.count + 1,
+                            new HashSet<String>() {{
+                                addAll(existing.allIds);
+                                addAll(newValue.allIds);
+                            }},
+                            new HashSet<String>() {{
+                                addAll(existing.pathVariants);
+                                addAll(newValue.pathVariants);
+                            }}
+                        ));
+                    break;
+                }
+            }
+            
+            if (!matched) {
+                skippedUrls.add(url);
+            }
+        }
+
+        // Write results to output file
+        writeResults(outputFile, results, skippedUrls, allPathVariants);
+
+        return results;
+    }
+
+    private static void writeResults(String outputFile, Map<String, AggregationResult> results, 
+                                   List<String> skippedUrls, Set<String> allPathVariants) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
+            // Write header
+            writer.write("Base Pattern,Original URL,Sum,Count,All IDs,Path Variants\n");
+
+            // Write each aggregated result
+            for (AggregationResult result : results.values()) {
+                writer.write(String.format("%s,%s,%.2f,%d,%s,%s\n",
+                    escapeCsvField(result.replacementPattern),
+                    escapeCsvField(result.originalPattern),
+                    result.sum,
+                    result.count,
+                    escapeCsvField(String.join(", ", result.allIds)),
+                    escapeCsvField(String.join(", ", result.pathVariants))
+                ));
+            }
+
+            // Write path variants summary
+            writer.write("\nAll Path Variants Found:\n");
+            writer.write(String.join(", ", allPathVariants) + "\n");
+
+            // Write totals
+            double totalSum = results.values().stream()
+                .mapToDouble(r -> r.sum)
+                .sum();
+            int totalCount = results.values().stream()
+                .mapToInt(r -> r.count)
+                .sum();
+            writer.write(String.format("\nTotals,,%,.2f,%d,\n", totalSum, totalCount));
+
+            // Write skipped URLs
+            if (!skippedUrls.isEmpty()) {
+                writer.write("\nSkipped URLs (Invalid format or no matching pattern):\n");
+                for (String url : skippedUrls) {
+                    writer.write(url + "\n");
+                }
+            }
+        }
+    }
+
+    private static String escapeCsvField(String field) {
+        if (field.contains(",") || field.contains("\"") || field.contains("\n")) {
+            return "\"" + field.replace("\"", "\"\"") + "\"";
+        }
+        return field;
+    }
+
+    public static void main(String[] args) {
+        try {
+            // Example usage
+            String inputFile = "input.csv";
+            String outputFile = "aggregated_output.csv";
+            
+            // Create sample input file for demonstration
+            createSampleInputFile(inputFile);
+            
+            // Process the file
+            Map<String, AggregationResult> results = processCSVFile(inputFile, outputFile);
+            
+            // Print results to console
+            System.out.println("Aggregation Results:");
+            results.values().forEach(System.out::println);
+            
+            System.out.println("\nProcessing complete. Check " + outputFile + " for detailed results.");
+            
+        } catch (IOException e) {
+            System.err.println("Error processing files: " + e.getMessage());
+        }
+    }
+
+    // Helper method to create sample input file
+    private static void createSampleInputFile(String filename) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(filename))) {
+            writer.write("URL,Number\n");
+            writer.write("/api/ui/report-part-fine/play/1456ab21323df/time/,100.50\n");
+            writer.write("/api/ui/report-part-fine/play/789xyz123/limit,75.25\n");
+            writer.write("/api/ui/report-part-fine/play/456def789/cross,200.75\n");
+            writer.write("/api/ui/report-part-fine/play/123abc456/time/987xyz654,150.00\n");
+            writer.write("/api/ui/report-part-fine/play/999zzz888/limit/456def789,125.50\n");
+        }
+    }
+}
