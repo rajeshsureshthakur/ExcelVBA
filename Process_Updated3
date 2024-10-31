@@ -321,3 +321,173 @@ public class URLPatternAggregator {
         }
     }
 }
+
+
+
+
+
+
+
+
+
+// ... (previous code remains same until the processCSVFile method)
+
+    public static Map<String, AggregationResult> processCSVFile(String inputFile, String outputFile) throws IOException {
+        List<PatternMatcher> patterns = Arrays.asList(
+            // Pattern for URLs with digits - keeping digits in replacement
+            new PatternMatcher(
+                "/api/ui/report-part-fine/(\\d+)/play$",
+                "", // empty replacement as we'll keep the digits
+                false
+            ),
+            // Other patterns remain same
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9]+)/([a-zA-Z]+)/([a-zA-Z0-9]+)$",
+                "<Common>",
+                true
+            ),
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9]+)/([a-zA-Z]+)/?$",
+                "<Common>",
+                true
+            ),
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9]+)$",
+                "<Common>",
+                false
+            )
+        );
+
+        Map<String, AggregationResult> results = new HashMap<>();
+        List<String> skippedUrls = new ArrayList<>();
+        List<String> invalidLines = new ArrayList<>();
+        Set<String> allPathVariants = new HashSet<>();
+
+        List<String> lines = Files.readAllLines(Paths.get(inputFile));
+        boolean isFirstLine = true;
+
+        for (String line : lines) {
+            if (isFirstLine) {
+                isFirstLine = false;
+                continue;
+            }
+
+            String url;
+            double number = 0.0;
+
+            try {
+                String[] parts = line.split(",", -1);
+                if (parts.length < 2) {
+                    url = line.trim();
+                } else {
+                    url = parts[0].trim();
+                    String numberStr = parts[1].trim();
+
+                    if (!numberStr.isEmpty()) {
+                        try {
+                            number = Double.parseDouble(numberStr);
+                        } catch (NumberFormatException e) {
+                            invalidLines.add("Invalid number format in line: " + line);
+                            continue;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                invalidLines.add("Error processing line: " + line);
+                continue;
+            }
+
+            boolean matched = false;
+            for (PatternMatcher matcher : patterns) {
+                if (matcher.matches(url)) {
+                    matched = true;
+                    MatchResult match = matcher.extractComponents(url);
+                    if (match == null) continue;
+
+                    if (!match.pathVariant.isEmpty()) {
+                        allPathVariants.add(match.pathVariant);
+                    }
+
+                    // For digit patterns, use the original URL as the key
+                    String replacementPattern;
+                    if (!match.digits.isEmpty()) {
+                        // Keep the original pattern with digits for grouping
+                        replacementPattern = url;
+                    } else {
+                        replacementPattern = matcher.getReplacement(match);
+                    }
+
+                    Set<String> ids = new HashSet<>();
+                    if (!match.id.isEmpty()) ids.add(match.id);
+                    if (!match.secondId.isEmpty()) ids.add(match.secondId);
+
+                    Set<String> pathVariants = new HashSet<>();
+                    if (!match.pathVariant.isEmpty()) {
+                        pathVariants.add(match.pathVariant);
+                    }
+
+                    Set<String> digits = new HashSet<>();
+                    if (!match.digits.isEmpty()) {
+                        digits.add(match.digits);
+                    }
+
+                    AggregationResult newResult = new AggregationResult(
+                        url, 
+                        replacementPattern, 
+                        number, 
+                        1, 
+                        ids,
+                        pathVariants,
+                        digits
+                    );
+
+                    results.merge(
+                        replacementPattern,
+                        newResult,
+                        (existing, newValue) -> new AggregationResult(
+                            existing.originalPattern,
+                            existing.replacementPattern,
+                            existing.sum + (newValue.sum >= 0 ? newValue.sum : 0),
+                            existing.count + 1,
+                            new HashSet<String>() {{
+                                addAll(existing.allIds);
+                                addAll(newValue.allIds);
+                            }},
+                            new HashSet<String>() {{
+                                addAll(existing.pathVariants);
+                                addAll(newValue.pathVariants);
+                            }},
+                            new HashSet<String>() {{
+                                addAll(existing.digits);
+                                addAll(newValue.digits);
+                            }}
+                        )
+                    );
+                    break;
+                }
+            }
+            
+            if (!matched) {
+                skippedUrls.add(url);
+            }
+        }
+
+        writeResults(outputFile, results, skippedUrls, invalidLines, allPathVariants);
+        return results;
+    }
+
+// ... (rest of the code remains same)
+
+    private static void createSampleInputFile(String filename) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(filename))) {
+            writer.write("URL,Number\n");
+            // Different digit patterns
+            writer.write("/api/ui/report-part-fine/1234/play,100.50\n");
+            writer.write("/api/ui/report-part-fine/12345/play,75.25\n");
+            writer.write("/api/ui/report-part-fine/123456/play,80.00\n");
+            // URLs with IDs
+            writer.write("/api/ui/report-part-fine/play/1456ab21323df/time/,150.75\n");
+            writer.write("/api/ui/report-part-fine/play/789xyz123/limit,200.25\n");
+            writer.write("/api/ui/report-part-fine/play/456def789\n");
+        }
+    }
