@@ -1,0 +1,88 @@
+// ... (keep previous code and update the patterns list in processCSVFile method)
+
+    public static Map<String, AggregationResult> processCSVFile(String inputFile, String outputFile) throws IOException {
+        List<PatternMatcher> patterns = Arrays.asList(
+            // Pattern for URLs with two consecutive numbers at the end
+            new PatternMatcher(
+                "/pi/ui/plane/key/login/(\\d+)/(\\d+)$",
+                "<N>/<N>",
+                false
+            ),
+            // Existing patterns...
+            new PatternMatcher(
+                "/api/ui/report-part-fine/(\\d+)/play$",
+                "",
+                false
+            ),
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9-]+)$",
+                "<Common>",
+                false
+            ),
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9-]+)/([a-zA-Z]+)/([a-zA-Z0-9-]+)$",
+                "<Common>",
+                true
+            ),
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9-]+)/([a-zA-Z]+)/?$",
+                "<Common>",
+                true
+            )
+        );
+
+        // ... (rest of the method remains same)
+    }
+
+    // Update PatternMatcher class to handle multiple digits
+    public class PatternMatcher {
+        // ... (previous attributes remain same)
+
+        public String getReplacement(MatchResult match) {
+            if (!match.digits.isEmpty()) {
+                if (pattern.pattern().contains("login/(\\d+)/(\\d+)")) {
+                    // For double number pattern, replace both numbers
+                    String result = match.originalUrl;
+                    String[] parts = result.split("/");
+                    // Replace last two segments with <N>
+                    parts[parts.length - 1] = "<N>";
+                    parts[parts.length - 2] = "<N>";
+                    return String.join("/", parts);
+                } else {
+                    // Original digit replacement logic
+                    return match.originalUrl.replaceFirst("/" + match.digits + "/", "/<N>/");
+                }
+            }
+            // Rest of the replacement logic remains same...
+            String result = match.originalUrl;
+            if (!match.id.isEmpty()) {
+                result = result.replace(match.id, "<Common>");
+            }
+            if (!match.secondId.isEmpty()) {
+                result = result.replace(match.secondId, "<Common>");
+            }
+            return result;
+        }
+
+        public MatchResult extractComponents(String input) {
+            Matcher matcher = pattern.matcher(input);
+            if (matcher.matches()) {
+                if (pattern.pattern().contains("login/(\\d+)/(\\d+)")) {
+                    // For double number pattern, combine both numbers
+                    String digits = matcher.group(1) + "/" + matcher.group(2);
+                    return new MatchResult(input, "", "", "", digits);
+                } else if (pattern.pattern().contains("\\d+") && 
+                         !pattern.pattern().contains("/play/[a-zA-Z0-9-]")) {
+                    String digits = matcher.group(1);
+                    return new MatchResult(input, "", "", "", digits);
+                } else {
+                    // Original ID pattern logic
+                    String id = matcher.group(1);
+                    String pathVariant = hasPathVariant && matcher.groupCount() > 1 ? matcher.group(2) : "";
+                    String secondId = hasPathVariant && matcher.groupCount() > 2 ? matcher.group(3) : "";
+                    return new MatchResult(input, id, pathVariant, secondId, "");
+                }
+            }
+            return null;
+        }
+    }
