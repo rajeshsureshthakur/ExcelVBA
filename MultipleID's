@@ -1,0 +1,259 @@
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.regex.*;
+
+public class URLPatternAggregator {
+    public static class AggregationResult {
+        private final String originalPattern;
+        private final String replacementPattern;
+        private final double sum;
+        private final int count;
+        private final Set<String> allIds;
+
+        public AggregationResult(String originalPattern, String replacementPattern, double sum, int count, Set<String> allIds) {
+            this.originalPattern = originalPattern;
+            this.replacementPattern = replacementPattern;
+            this.sum = sum;
+            this.count = count;
+            this.allIds = allIds;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("Pattern: %s -> %s, Sum: %.2f, Count: %d, IDs: %s", 
+                originalPattern, replacementPattern, sum, count, allIds);
+        }
+    }
+
+    public static class PatternMatcher {
+        private final Pattern pattern;
+        private final String replacement;
+        private final Pattern idValidator;
+        private final int expectedIdCount;
+
+        public PatternMatcher(String regex, String replacement, int expectedIdCount) {
+            this.pattern = Pattern.compile(regex);
+            this.replacement = replacement;
+            this.expectedIdCount = expectedIdCount;
+            // ID must contain at least one digit and be at least 8 characters long
+            this.idValidator = Pattern.compile("[a-zA-Z0-9]{8,}");
+        }
+
+        public boolean matches(String input) {
+            Matcher matcher = pattern.matcher(input);
+            if (matcher.matches()) {
+                // Validate all captured IDs
+                for (int i = 1; i <= expectedIdCount; i++) {
+                    String id = matcher.group(i);
+                    if (!idValidator.matcher(id).matches() || !id.matches(".*\\d+.*")) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            return false;
+        }
+
+        public MatchResult extractComponents(String input) {
+            Matcher matcher = pattern.matcher(input);
+            if (matcher.matches()) {
+                List<String> ids = new ArrayList<>();
+                for (int i = 1; i <= expectedIdCount; i++) {
+                    ids.add(matcher.group(i));
+                }
+                return new MatchResult(input, ids);
+            }
+            return null;
+        }
+
+        public String getReplacement(String originalUrl, List<String> ids) {
+            String result = originalUrl;
+            for (String id : ids) {
+                result = result.replace(id, "<Common>");
+            }
+            return result;
+        }
+    }
+
+    public static class MatchResult {
+        public final String originalUrl;
+        public final List<String> ids;
+
+        public MatchResult(String originalUrl, List<String> ids) {
+            this.originalUrl = originalUrl;
+            this.ids = ids;
+        }
+    }
+
+    public static Map<String, AggregationResult> processCSVFile(String inputFile, String outputFile) throws IOException {
+        // Define pattern matchers with support for multiple IDs
+        List<PatternMatcher> patterns = Arrays.asList(
+            // Pattern for URLs with two IDs
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9]{8,})/time/([a-zA-Z0-9]{8,})$",
+                "<Common>",
+                2
+            ),
+            // Pattern for URLs with single ID and additional path
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9]{8,})/time$",
+                "<Common>",
+                1
+            ),
+            // Pattern for URLs with single ID
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9]{8,})$",
+                "<Common>",
+                1
+            ),
+            // Pattern for schedule URLs with extended path
+            new PatternMatcher(
+                "/api/ui/report-task-ok/schedule/([a-zA-Z0-9]{8,})/([a-zA-Z0-9]{8,})$",
+                "<Common>",
+                2
+            )
+        );
+
+        Map<String, AggregationResult> results = new HashMap<>();
+        List<String> skippedUrls = new ArrayList<>();
+
+        // Read and process input file
+        List<String> lines = Files.readAllLines(Paths.get(inputFile));
+        boolean isFirstLine = true;
+
+        for (String line : lines) {
+            if (isFirstLine) {
+                isFirstLine = false;
+                continue;
+            }
+
+            String[] parts = line.split(",", 2);
+            if (parts.length != 2) continue;
+
+            String url = parts[0].trim();
+            double number;
+            try {
+                number = Double.parseDouble(parts[1].trim());
+            } catch (NumberFormatException e) {
+                System.err.println("Invalid number format in line: " + line);
+                continue;
+            }
+
+            boolean matched = false;
+            // Try each pattern matcher
+            for (PatternMatcher matcher : patterns) {
+                if (matcher.matches(url)) {
+                    matched = true;
+                    MatchResult match = matcher.extractComponents(url);
+                    if (match == null) continue;
+
+                    String replacementPattern = matcher.getReplacement(match.originalUrl, match.ids);
+                    String groupKey = replacementPattern;
+
+                    // Update aggregation results
+                    results.merge(groupKey,
+                        new AggregationResult(url, replacementPattern, number, 1, 
+                            new HashSet<>(match.ids)),
+                        (existing, newValue) -> new AggregationResult(
+                            existing.originalPattern,
+                            existing.replacementPattern,
+                            existing.sum + number,
+                            existing.count + 1,
+                            new HashSet<String>() {{
+                                addAll(existing.allIds);
+                                addAll(newValue.allIds);
+                            }}
+                        ));
+                    break;
+                }
+            }
+            
+            if (!matched) {
+                skippedUrls.add(url);
+            }
+        }
+
+        // Write results to output file
+        writeResults(outputFile, results, skippedUrls);
+
+        return results;
+    }
+
+    private static void writeResults(String outputFile, Map<String, AggregationResult> results, List<String> skippedUrls) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
+            // Write header
+            writer.write("Original URL,Replacement Pattern,Sum,Count,All IDs\n");
+
+            // Write each aggregated result
+            for (AggregationResult result : results.values()) {
+                writer.write(String.format("%s,%s,%.2f,%d,%s\n",
+                    escapeCsvField(result.originalPattern),
+                    escapeCsvField(result.replacementPattern),
+                    result.sum,
+                    result.count,
+                    escapeCsvField(String.join(", ", result.allIds))
+                ));
+            }
+
+            // Write totals
+            double totalSum = results.values().stream()
+                .mapToDouble(r -> r.sum)
+                .sum();
+            int totalCount = results.values().stream()
+                .mapToInt(r -> r.count)
+                .sum();
+            writer.write(String.format("\nTotals,,%,.2f,%d,\n", totalSum, totalCount));
+
+            // Write skipped URLs
+            if (!skippedUrls.isEmpty()) {
+                writer.write("\nSkipped URLs (Invalid format or no matching pattern):\n");
+                for (String url : skippedUrls) {
+                    writer.write(url + "\n");
+                }
+            }
+        }
+    }
+
+    private static String escapeCsvField(String field) {
+        if (field.contains(",") || field.contains("\"") || field.contains("\n")) {
+            return "\"" + field.replace("\"", "\"\"") + "\"";
+        }
+        return field;
+    }
+
+    public static void main(String[] args) {
+        try {
+            // Example usage
+            String inputFile = "input.csv";
+            String outputFile = "aggregated_output.csv";
+            
+            // Create sample input file for demonstration
+            createSampleInputFile(inputFile);
+            
+            // Process the file
+            Map<String, AggregationResult> results = processCSVFile(inputFile, outputFile);
+            
+            // Print results to console
+            System.out.println("Aggregation Results:");
+            results.values().forEach(System.out::println);
+            
+            System.out.println("\nProcessing complete. Check " + outputFile + " for detailed results.");
+            
+        } catch (IOException e) {
+            System.err.println("Error processing files: " + e.getMessage());
+        }
+    }
+
+    // Helper method to create sample input file
+    private static void createSampleInputFile(String filename) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(filename))) {
+            writer.write("URL,Number\n");
+            writer.write("/api/ui/report-part-fine/play/1456ab21323df/time/123avd34df,100.50\n");
+            writer.write("/api/ui/report-part-fine/play/789xyz123/time,75.25\n");
+            writer.write("/api/ui/report-part-fine/play/456def789,200.75\n");
+            writer.write("/api/ui/report-task-ok/schedule/123abc456/987xyz654,150.00\n");
+            writer.write("/api/ui/report-part-fine/play/999zzz888/time/456def789,125.50\n");
+        }
+    }
+}
