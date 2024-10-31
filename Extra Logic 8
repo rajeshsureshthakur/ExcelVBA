@@ -1,0 +1,74 @@
+public class PatternMatcher {
+        // ... (previous attributes remain same)
+
+        public MatchResult extractComponents(String input) {
+            Matcher matcher = pattern.matcher(input.trim());
+            if (matcher.matches()) {
+                if (pattern.pattern().contains("login/(\\d+)/(\\d+)")) {
+                    // For two-number pattern
+                    String firstDigits = matcher.group(1).trim();
+                    String secondDigits = matcher.group(2).trim();
+                    // Create Set of digits instead of single string
+                    Set<String> digits = new HashSet<>();
+                    digits.add(firstDigits);
+                    digits.add(secondDigits);
+                    // Pass both numbers separately
+                    return new MatchResult(input.trim(), "", "", "", firstDigits, "", secondDigits, digits);
+                } else if (pattern.pattern().contains("\\d+") && 
+                         !pattern.pattern().contains("/play/[a-zA-Z0-9-]")) {
+                    String digits = matcher.group(1).trim();
+                    Set<String> digitsSet = new HashSet<>(Collections.singleton(digits));
+                    return new MatchResult(input.trim(), "", "", "", digits, "", "", digitsSet);
+                } else {
+                    String id = matcher.group(1);
+                    String pathVariant = hasPathVariant && matcher.groupCount() > 1 ? matcher.group(2) : "";
+                    String secondId = hasPathVariant && matcher.groupCount() > 2 ? matcher.group(3) : "";
+                    return new MatchResult(input.trim(), id, pathVariant, secondId, "", "", "", new HashSet<>());
+                }
+            }
+            return null;
+        }
+
+        public String getReplacement(MatchResult match) {
+            if (!match.digits.isEmpty()) {
+                if (!match.secondDigits.isEmpty()) {
+                    // Handle double number pattern by replacing both numbers
+                    return "/api/ui/plane/key/login/<N>/<N>";
+                } else {
+                    return match.originalUrl.replaceFirst("/" + match.digits.trim() + "/", "/<N>/");
+                }
+            }
+            String result = match.originalUrl;
+            if (!match.id.isEmpty()) {
+                result = result.replace(match.id, "<Common>");
+            }
+            if (!match.secondId.isEmpty()) {
+                result = result.replace(match.secondId, "<Common>");
+            }
+            return result.trim();
+        }
+    }
+
+    public static class MatchResult {
+        public final String originalUrl;
+        public final String id;
+        public final String pathVariant;
+        public final String secondId;
+        public final String digits;
+        public final String digitLength;
+        public final String secondDigits;
+        public final Set<String> allDigits;  // Added to track all digits
+
+        public MatchResult(String originalUrl, String id, String pathVariant, 
+                         String secondId, String digits, String digitLength, 
+                         String secondDigits, Set<String> allDigits) {
+            this.originalUrl = originalUrl != null ? originalUrl : "";
+            this.id = id != null ? id : "";
+            this.pathVariant = pathVariant != null ? pathVariant : "";
+            this.secondId = secondId != null ? secondId : "";
+            this.digits = digits != null ? digits : "";
+            this.digitLength = digitLength != null ? digitLength : "";
+            this.secondDigits = secondDigits != null ? secondDigits : "";
+            this.allDigits = allDigits != null ? allDigits : new HashSet<>();
+        }
+    }
