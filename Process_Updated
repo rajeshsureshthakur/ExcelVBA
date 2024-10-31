@@ -1,0 +1,234 @@
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.regex.*;
+
+public class URLPatternAggregator {
+    public static class AggregationResult {
+        private final String originalPattern;
+        private final String replacementPattern;
+        private final double sum;
+        private final int count;
+        private final Set<String> allIds;
+        private final Set<String> pathVariants;
+        private final Set<String> digits;
+
+        public AggregationResult(String originalPattern, String replacementPattern, double sum, int count, 
+                               Set<String> allIds, Set<String> pathVariants, Set<String> digits) {
+            this.originalPattern = originalPattern;
+            this.replacementPattern = replacementPattern;
+            this.sum = sum;
+            this.count = count;
+            this.allIds = allIds;
+            this.pathVariants = pathVariants;
+            this.digits = digits;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("Pattern: %s -> %s, Sum: %.2f, Count: %d, IDs: %s, Path Variants: %s, Digits: %s", 
+                originalPattern, replacementPattern, sum, count, allIds, pathVariants, digits);
+        }
+    }
+
+    public static class PatternMatcher {
+        private final Pattern pattern;
+        private final String replacement;
+        private final Pattern idValidator;
+        private final boolean hasPathVariant;
+
+        public PatternMatcher(String regex, String replacement, boolean hasPathVariant) {
+            this.pattern = Pattern.compile(regex);
+            this.replacement = replacement;
+            this.hasPathVariant = hasPathVariant;
+            this.idValidator = Pattern.compile("[a-zA-Z0-9]{8,}");
+        }
+
+        public boolean matches(String input) {
+            Matcher matcher = pattern.matcher(input);
+            if (matcher.matches()) {
+                if (pattern.pattern().contains("\\d+/play")) return true;
+                String id = matcher.group(1);
+                return idValidator.matcher(id).matches() && id.matches(".*\\d+.*");
+            }
+            return false;
+        }
+
+        public MatchResult extractComponents(String input) {
+            Matcher matcher = pattern.matcher(input);
+            if (matcher.matches()) {
+                if (pattern.pattern().contains("\\d+/play")) {
+                    String digits = matcher.group(1);
+                    return new MatchResult(input, "", "", "", digits);
+                } else {
+                    String id = matcher.group(1);
+                    String pathVariant = hasPathVariant && matcher.groupCount() > 1 ? matcher.group(2) : "";
+                    String secondId = hasPathVariant && matcher.groupCount() > 2 ? matcher.group(3) : "";
+                    return new MatchResult(input, id, pathVariant, secondId, "");
+                }
+            }
+            return null;
+        }
+
+        public String getReplacement(MatchResult match) {
+            if (!match.digits.isEmpty()) {
+                return match.originalUrl.replaceFirst("/" + match.digits + "/", "/<N>/");
+            }
+            String result = match.originalUrl;
+            if (!match.id.isEmpty()) {
+                result = result.replace(match.id, "<Common>");
+            }
+            if (!match.secondId.isEmpty()) {
+                result = result.replace(match.secondId, "<Common>");
+            }
+            return result;
+        }
+    }
+
+    public static class MatchResult {
+        public final String originalUrl;
+        public final String id;
+        public final String pathVariant;
+        public final String secondId;
+        public final String digits;
+
+        public MatchResult(String originalUrl, String id, String pathVariant, String secondId, String digits) {
+            this.originalUrl = originalUrl;
+            this.id = id;
+            this.pathVariant = pathVariant;
+            this.secondId = secondId;
+            this.digits = digits;
+        }
+    }
+
+    public static Map<String, AggregationResult> processCSVFile(String inputFile, String outputFile) throws IOException {
+        List<PatternMatcher> patterns = Arrays.asList(
+            // Pattern for URLs with digits
+            new PatternMatcher(
+                "/api/ui/report-part-fine/(\\d+)/play$",
+                "<N>",
+                false
+            ),
+            // Pattern for URLs with ID, variable path segment and second ID
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9]+)/([a-zA-Z]+)/([a-zA-Z0-9]+)$",
+                "<Common>",
+                true
+            ),
+            // Pattern for URLs with ID and variable path segment
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9]+)/([a-zA-Z]+)/?$",
+                "<Common>",
+                true
+            ),
+            // Pattern for URLs with just ID
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9]+)$",
+                "<Common>",
+                false
+            )
+        );
+
+        Map<String, AggregationResult> results = new HashMap<>();
+        List<String> skippedUrls = new ArrayList<>();
+        List<String> invalidLines = new ArrayList<>();
+        Set<String> allPathVariants = new HashSet<>();
+
+        List<String> lines = Files.readAllLines(Paths.get(inputFile));
+        boolean isFirstLine = true;
+
+        for (String line : lines) {
+            if (isFirstLine) {
+                isFirstLine = false;
+                continue;
+            }
+
+            String url;
+            double number = 0.0;
+
+            try {
+                String[] parts = line.split(",", -1);
+                if (parts.length < 2) {
+                    url = line.trim();
+                } else {
+                    url = parts[0].trim();
+                    String numberStr = parts[1].trim();
+
+                    if (!numberStr.isEmpty()) {
+                        try {
+                            number = Double.parseDouble(numberStr);
+                        } catch (NumberFormatException e) {
+                            invalidLines.add("Invalid number format in line: " + line);
+                            continue;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                invalidLines.add("Error processing line: " + line);
+                continue;
+            }
+
+            boolean matched = false;
+            for (PatternMatcher matcher : patterns) {
+                if (matcher.matches(url)) {
+                    matched = true;
+                    MatchResult match = matcher.extractComponents(url);
+                    if (match == null) continue;
+
+                    if (!match.pathVariant.isEmpty()) {
+                        allPathVariants.add(match.pathVariant);
+                    }
+
+                    String replacementPattern = matcher.getReplacement(match);
+
+                    Set<String> ids = new HashSet<>();
+                    if (!match.id.isEmpty()) ids.add(match.id);
+                    if (!match.secondId.isEmpty()) ids.add(match.secondId);
+
+                    Set<String> pathVariants = new HashSet<>();
+                    if (!match.pathVariant.isEmpty()) {
+                        pathVariants.add(match.pathVariant);
+                    }
+
+                    Set<String> digits = new HashSet<>();
+                    if (!match.digits.isEmpty()) {
+                        digits.add(match.digits);
+                    }
+
+                    results.merge(replacementPattern,
+                        new AggregationResult(url, replacementPattern, number, 1, ids, pathVariants, digits),
+                        (existing, newValue) -> new AggregationResult(
+                            existing.originalPattern,
+                            existing.replacementPattern,
+                            existing.sum + number,
+                            existing.count + 1,
+                            new HashSet<String>() {{
+                                addAll(existing.allIds);
+                                addAll(newValue.allIds);
+                            }},
+                            new HashSet<String>() {{
+                                addAll(existing.pathVariants);
+                                addAll(newValue.pathVariants);
+                            }},
+                            new HashSet<String>() {{
+                                addAll(existing.digits);
+                                addAll(newValue.digits);
+                            }}
+                        ));
+                    break;
+                }
+            }
+            
+            if (!matched) {
+                skippedUrls.add(url);
+            }
+        }
+
+        writeResults(outputFile, results, skippedUrls, invalidLines, allPathVariants);
+        return results;
+    }
+
+    // ... (rest of the code stays the same: writeResults, escapeCsvField, main method, etc.)
+
+   
+}
