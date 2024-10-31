@@ -1,0 +1,93 @@
+// ... (previous code remains same until pattern definition in processCSVFile)
+
+    public static Map<String, AggregationResult> processCSVFile(String inputFile, String outputFile) throws IOException {
+        List<PatternMatcher> patterns = Arrays.asList(
+            // Updated pattern for URLs with two consecutive numbers
+            new PatternMatcher(
+                "/pi/ui/plane/key/login/(\\d+)/(\\d+)$",
+                "<N>/<N>",
+                true  // Using hasPathVariant to indicate double number pattern
+            ),
+            // Other patterns remain same...
+            new PatternMatcher(
+                "/api/ui/report-part-fine/(\\d+)/play$",
+                "",
+                false
+            ),
+            // ... rest of the patterns
+        );
+
+        // ... rest of the method remains same
+    }
+
+    public static class PatternMatcher {
+        // ... (previous attributes remain same)
+
+        public MatchResult extractComponents(String input) {
+            Matcher matcher = pattern.matcher(input);
+            if (matcher.matches()) {
+                if (pattern.pattern().contains("login/(\\d+)/(\\d+)")) {
+                    // For double number pattern, capture both numbers
+                    String firstDigits = matcher.group(1);
+                    String secondDigits = matcher.group(2);
+                    return new MatchResult(input, "", "", "", firstDigits, "", secondDigits);
+                } else if (pattern.pattern().contains("\\d+") && 
+                         !pattern.pattern().contains("/play/[a-zA-Z0-9-]")) {
+                    String digits = matcher.group(1);
+                    return new MatchResult(input, "", "", "", digits, "", "");
+                } else {
+                    String id = matcher.group(1);
+                    String pathVariant = hasPathVariant && matcher.groupCount() > 1 ? matcher.group(2) : "";
+                    String secondId = hasPathVariant && matcher.groupCount() > 2 ? matcher.group(3) : "";
+                    return new MatchResult(input, id, pathVariant, secondId, "", "", "");
+                }
+            }
+            return null;
+        }
+
+        public String getReplacement(MatchResult match) {
+            if (!match.digits.isEmpty()) {
+                if (!match.secondDigits.isEmpty()) {
+                    // Handle double number pattern
+                    String result = match.originalUrl;
+                    result = result.replaceFirst("/" + match.digits + "/", "/<N>/");
+                    result = result.replaceFirst("/" + match.secondDigits + "$", "/<N>");
+                    return result;
+                } else {
+                    // Handle single number pattern
+                    return match.originalUrl.replaceFirst("/" + match.digits + "/", "/<N>/");
+                }
+            }
+            // Handle ID patterns
+            String result = match.originalUrl;
+            if (!match.id.isEmpty()) {
+                result = result.replace(match.id, "<Common>");
+            }
+            if (!match.secondId.isEmpty()) {
+                result = result.replace(match.secondId, "<Common>");
+            }
+            return result;
+        }
+    }
+
+    public static class MatchResult {
+        public final String originalUrl;
+        public final String id;
+        public final String pathVariant;
+        public final String secondId;
+        public final String digits;
+        public final String digitLength;
+        public final String secondDigits;  // For second number in pattern
+
+        public MatchResult(String originalUrl, String id, String pathVariant, 
+                         String secondId, String digits, String digitLength, 
+                         String secondDigits) {
+            this.originalUrl = originalUrl != null ? originalUrl : "";
+            this.id = id != null ? id : "";
+            this.pathVariant = pathVariant != null ? pathVariant : "";
+            this.secondId = secondId != null ? secondId : "";
+            this.digits = digits != null ? digits : "";
+            this.digitLength = digitLength != null ? digitLength : "";
+            this.secondDigits = secondDigits != null ? secondDigits : "";
+        }
+    }
