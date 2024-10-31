@@ -1,0 +1,40 @@
+// ... (keep all the previous code until the number parsing section in processCSVFile method)
+
+            try {
+                // Clean the entire line first
+                line = line.replaceAll("\\s+", " ").trim();
+                
+                String[] parts = line.split(",");
+                if (parts.length < 2) {
+                    url = line.trim();
+                } else {
+                    url = parts[0].trim();
+                    // Get the second column (index 1) as our number value
+                    String valuePart = parts[1].trim();
+                    
+                    if (!valuePart.isEmpty()) {
+                        try {
+                            // Remove quotes and clean the number
+                            String cleanNumber = valuePart
+                                .replaceAll("\"", "")  // Remove quotes
+                                .replaceAll("\\s+", "") // Remove spaces
+                                .trim();
+                            
+                            if (!cleanNumber.isEmpty()) {
+                                number = Double.parseDouble(cleanNumber);
+                            }
+                        } catch (NumberFormatException e) {
+                            System.out.println("Warning: Invalid number format for URL: " + url + 
+                                            ". Original value: '" + valuePart + "'." +
+                                            " Using default value 0.0");
+                            number = 0.0;
+                            continue;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                invalidLines.add("Error processing line: " + line + " - " + e.getMessage());
+                continue;
+            }
+
+            // Rest of the code remains same...
