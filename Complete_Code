@@ -1,0 +1,315 @@
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.regex.*;
+
+public class URLPatternAggregator {
+    public static class CsvRow {
+        public final String apiName;
+        public final double apiTph;
+        public final String minRt;
+        public final String avgRt;
+        public final String percentile90;
+        public final String percentile95;
+        public final String maxRt;
+
+        public CsvRow(String apiName, double apiTph, String minRt, String avgRt, 
+                     String percentile90, String percentile95, String maxRt) {
+            this.apiName = apiName;
+            this.apiTph = apiTph;
+            this.minRt = minRt;
+            this.avgRt = avgRt;
+            this.percentile90 = percentile90;
+            this.percentile95 = percentile95;
+            this.maxRt = maxRt;
+        }
+
+        public static CsvRow fromLine(String line) {
+            String[] parts = line.split(",", -1);
+            String apiName = parts[0].trim();
+            double apiTph = 0.0;
+            try {
+                String tphStr = parts[1].trim().replace(",", "");
+                apiTph = Double.parseDouble(tphStr);
+            } catch (Exception e) {
+                // Keep default 0.0 if parsing fails
+            }
+            
+            String minRt = parts.length > 2 ? parts[2].trim() : "";
+            String avgRt = parts.length > 3 ? parts[3].trim() : "";
+            String p90 = parts.length > 4 ? parts[4].trim() : "";
+            String p95 = parts.length > 5 ? parts[5].trim() : "";
+            String maxRt = parts.length > 6 ? parts[6].trim() : "";
+
+            return new CsvRow(apiName, apiTph, minRt, avgRt, p90, p95, maxRt);
+        }
+    }
+
+    public static class AggregationResult {
+        private final String originalPattern;
+        private final String replacementPattern;
+        private final double sum;
+        private final int count;
+        private final Set<String> allIds;
+        private final Set<String> pathVariants;
+        private final Set<String> digits;
+
+        public AggregationResult(String originalPattern, String replacementPattern, double sum, int count, 
+                               Set<String> allIds, Set<String> pathVariants, Set<String> digits) {
+            this.originalPattern = originalPattern;
+            this.replacementPattern = replacementPattern;
+            this.sum = sum;
+            this.count = count;
+            this.allIds = allIds != null ? allIds : new HashSet<>();
+            this.pathVariants = pathVariants != null ? pathVariants : new HashSet<>();
+            this.digits = digits != null ? digits : new HashSet<>();
+        }
+    }
+
+    public static class PatternMatcher {
+        private final Pattern pattern;
+        private final String replacement;
+        private final Pattern idValidator;
+        private final boolean hasPathVariant;
+
+        public PatternMatcher(String regex, String replacement, boolean hasPathVariant) {
+            this.pattern = Pattern.compile(regex);
+            this.replacement = replacement;
+            this.hasPathVariant = hasPathVariant;
+            this.idValidator = Pattern.compile("[a-zA-Z0-9-]{8,}");
+        }
+
+        public boolean matches(String input) {
+            Matcher matcher = pattern.matcher(input.trim());
+            if (matcher.matches()) {
+                if (pattern.pattern().contains("login/(\\d+)/(\\d+)")) {
+                    return true;
+                } else if (pattern.pattern().contains("\\d+") && 
+                         !pattern.pattern().contains("/play/[a-zA-Z0-9-]")) {
+                    return true;
+                }
+                String id = matcher.group(1);
+                return idValidator.matcher(id).matches() && 
+                       (id.matches(".*\\d+.*") || id.contains("-"));
+            }
+            return false;
+        }
+
+        public MatchResult extractComponents(String input) {
+            Matcher matcher = pattern.matcher(input.trim());
+            if (matcher.matches()) {
+                if (pattern.pattern().contains("login/(\\d+)/(\\d+)")) {
+                    String firstDigits = matcher.group(1).trim();
+                    String secondDigits = matcher.group(2).trim();
+                    Set<String> digits = new HashSet<>();
+                    digits.add(firstDigits);
+                    digits.add(secondDigits);
+                    return new MatchResult(input.trim(), "", "", "", firstDigits, "", secondDigits, digits);
+                } else if (pattern.pattern().contains("\\d+") && 
+                         !pattern.pattern().contains("/play/[a-zA-Z0-9-]")) {
+                    String digits = matcher.group(1).trim();
+                    Set<String> digitsSet = new HashSet<>(Collections.singleton(digits));
+                    return new MatchResult(input.trim(), "", "", "", digits, "", "", digitsSet);
+                } else {
+                    String id = matcher.group(1);
+                    String pathVariant = hasPathVariant && matcher.groupCount() > 1 ? matcher.group(2) : "";
+                    String secondId = hasPathVariant && matcher.groupCount() > 2 ? matcher.group(3) : "";
+                    return new MatchResult(input.trim(), id, pathVariant, secondId, "", "", "", new HashSet<>());
+                }
+            }
+            return null;
+        }
+
+        public String getReplacement(MatchResult match) {
+            if (!match.digits.isEmpty()) {
+                if (!match.secondDigits.isEmpty()) {
+                    return "/api/ui/plane/key/login/<N>/<N>";
+                } else {
+                    return match.originalUrl.replaceFirst("/" + match.digits.trim() + "/", "/<N>/");
+                }
+            }
+            String result = match.originalUrl;
+            if (!match.id.isEmpty()) {
+                result = result.replace(match.id, "<Common>");
+            }
+            if (!match.secondId.isEmpty()) {
+                result = result.replace(match.secondId, "<Common>");
+            }
+            return result.trim();
+        }
+    }
+
+    public static class MatchResult {
+        public final String originalUrl;
+        public final String id;
+        public final String pathVariant;
+        public final String secondId;
+        public final String digits;
+        public final String digitLength;
+        public final String secondDigits;
+        public final Set<String> allDigits;
+
+        public MatchResult(String originalUrl, String id, String pathVariant, 
+                         String secondId, String digits, String digitLength, 
+                         String secondDigits, Set<String> allDigits) {
+            this.originalUrl = originalUrl != null ? originalUrl : "";
+            this.id = id != null ? id : "";
+            this.pathVariant = pathVariant != null ? pathVariant : "";
+            this.secondId = secondId != null ? secondId : "";
+            this.digits = digits != null ? digits : "";
+            this.digitLength = digitLength != null ? digitLength : "";
+            this.secondDigits = secondDigits != null ? secondDigits : "";
+            this.allDigits = allDigits != null ? allDigits : new HashSet<>();
+        }
+    }
+
+    public static Map<String, AggregationResult> processCSVFile(String inputFile, String outputFile) throws IOException {
+        List<PatternMatcher> patterns = Arrays.asList(
+            new PatternMatcher(
+                "/pi/ui/plane/key/login/(\\d+)/(\\d+)$",
+                "<N>/<N>",
+                true
+            ),
+            new PatternMatcher(
+                "/api/ui/report-part-fine/(\\d+)/play$",
+                "",
+                false
+            ),
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9-]+)$",
+                "<Common>",
+                false
+            ),
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9-]+)/([a-zA-Z]+)/([a-zA-Z0-9-]+)$",
+                "<Common>",
+                true
+            ),
+            new PatternMatcher(
+                "/api/ui/report-part-fine/play/([a-zA-Z0-9-]+)/([a-zA-Z]+)/?$",
+                "<Common>",
+                true
+            )
+        );
+
+        Map<String, AggregationResult> results = new HashMap<>();
+        List<CsvRow> skippedRows = new ArrayList<>();
+        List<String> invalidLines = new ArrayList<>();
+
+        List<String> lines = Files.readAllLines(Paths.get(inputFile));
+        boolean isFirstLine = true;
+
+        for (String line : lines) {
+            if (isFirstLine) {
+                isFirstLine = false;
+                continue;
+            }
+
+            try {
+                CsvRow row = CsvRow.fromLine(line);
+                boolean matched = false;
+
+                for (PatternMatcher matcher : patterns) {
+                    if (matcher.matches(row.apiName)) {
+                        matched = true;
+                        MatchResult match = matcher.extractComponents(row.apiName);
+                        if (match == null) continue;
+
+                        String replacementPattern = matcher.getReplacement(match);
+
+                        Set<String> ids = new HashSet<>();
+                        if (!match.id.isEmpty()) ids.add(match.id);
+                        if (!match.secondId.isEmpty()) ids.add(match.secondId);
+
+                        Set<String> pathVariants = new HashSet<>();
+                        if (!match.pathVariant.isEmpty()) {
+                            pathVariants.add(match.pathVariant);
+                        }
+
+                        results.merge(
+                            replacementPattern,
+                            new AggregationResult(row.apiName, replacementPattern, row.apiTph, 1, ids, pathVariants, match.allDigits),
+                            (existing, newValue) -> new AggregationResult(
+                                existing.originalPattern,
+                                existing.replacementPattern,
+                                existing.sum + newValue.sum,
+                                existing.count + 1,
+                                new HashSet<String>() {{
+                                    addAll(existing.allIds);
+                                    addAll(newValue.allIds);
+                                }},
+                                new HashSet<String>() {{
+                                    addAll(existing.pathVariants);
+                                    addAll(newValue.pathVariants);
+                                }},
+                                new HashSet<String>() {{
+                                    addAll(existing.digits);
+                                    addAll(newValue.digits);
+                                }}
+                            )
+                        );
+                        break;
+                    }
+                }
+                
+                if (!matched) {
+                    skippedRows.add(row);
+                }
+            } catch (Exception e) {
+                invalidLines.add("Error processing line: " + line);
+            }
+        }
+
+        writeResults(outputFile, results, skippedRows, invalidLines);
+        return results;
+    }
+
+    private static void writeResults(String outputFile, Map<String, AggregationResult> results, 
+                                   List<CsvRow> skippedRows, List<String> invalidLines) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
+            writer.write("API_Name,API_TPH,Min_RT,Avg_RT,90th Percentile,95th Percentile,Max_RT\n");
+
+            // Write skipped rows with all columns
+            for (CsvRow row : skippedRows) {
+                writer.write(String.format("%s,%.2f,%s,%s,%s,%s,%s\n",
+                    escapeCsvField(row.apiName),
+                    row.apiTph,
+                    escapeCsvField(row.minRt),
+                    escapeCsvField(row.avgRt),
+                    escapeCsvField(row.percentile90),
+                    escapeCsvField(row.percentile95),
+                    escapeCsvField(row.maxRt)
+                ));
+            }
+
+            // Write pattern matches with only pattern and sum
+            for (AggregationResult result : results.values()) {
+                writer.write(String.format("%s,%.2f,,,,,\n",
+                    escapeCsvField(result.replacementPattern),
+                    result.sum
+                ));
+            }
+        }
+    }
+
+    private static String escapeCsvField(String field) {
+        if (field != null && (field.contains(",") || field.contains("\"") || field.contains("\n"))) {
+            return "\"" + field.replace("\"", "\"\"") + "\"";
+        }
+        return field != null ? field : "";
+    }
+
+    public static void main(String[] args) {
+        try {
+            String inputFile = "input.csv";
+            String outputFile = "output.csv";
+            
+            Map<String, AggregationResult> results = processCSVFile(inputFile, outputFile);
+            System.out.println("Processing complete. Check " + outputFile + " for results.");
+            
+        } catch (IOException e) {
+            System.err.println("Error processing files: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
