@@ -1,0 +1,140 @@
+// ... (previous code remains same until processCSVFile method)
+
+    public static class AggregationResult {
+        private final String originalPattern;
+        private final String replacementPattern;
+        private final double sum;
+        private final int count;
+        private final Set<String> allIds;
+        private final Set<String> pathVariants;
+        private final Set<String> digits;
+        private final List<Double> percentile95Values;  // Add this field
+
+        public AggregationResult(String originalPattern, String replacementPattern, double sum, int count, 
+                               Set<String> allIds, Set<String> pathVariants, Set<String> digits,
+                               List<Double> percentile95Values) {
+            this.originalPattern = originalPattern;
+            this.replacementPattern = replacementPattern;
+            this.sum = sum;
+            this.count = count;
+            this.allIds = allIds != null ? allIds : new HashSet<>();
+            this.pathVariants = pathVariants != null ? pathVariants : new HashSet<>();
+            this.digits = digits != null ? digits : new HashSet<>();
+            this.percentile95Values = percentile95Values != null ? percentile95Values : new ArrayList<>();
+        }
+    }
+
+    private static double calculate95thPercentile(List<Double> values) {
+        if (values == null || values.isEmpty()) return 0.0;
+        
+        // Sort the values
+        List<Double> sortedValues = new ArrayList<>(values);
+        Collections.sort(sortedValues);
+        
+        // Calculate the index for 95th percentile
+        double index = (sortedValues.size() - 1) * 0.95;
+        int lowerIndex = (int) Math.floor(index);
+        int upperIndex = (int) Math.ceil(index);
+        
+        if (lowerIndex == upperIndex) {
+            return sortedValues.get(lowerIndex);
+        }
+        
+        // Interpolate between the two values
+        double lowerValue = sortedValues.get(lowerIndex);
+        double upperValue = sortedValues.get(upperIndex);
+        double fraction = index - lowerIndex;
+        
+        return lowerValue + (upperValue - lowerValue) * fraction;
+    }
+
+    public static Map<String, AggregationResult> processCSVFile(String inputFile, String outputFile) throws IOException {
+        // ... (previous code remains same until pattern match processing)
+
+        for (PatternMatcher matcher : patterns) {
+            if (matcher.matches(row.apiName)) {
+                matched = true;
+                MatchResult match = matcher.extractComponents(row.apiName);
+                if (match == null) continue;
+
+                String replacementPattern = matcher.getReplacement(match);
+
+                Set<String> ids = new HashSet<>();
+                if (!match.id.isEmpty()) ids.add(match.id);
+                if (!match.secondId.isEmpty()) ids.add(match.secondId);
+
+                Set<String> pathVariants = new HashSet<>();
+                if (!match.pathVariant.isEmpty()) {
+                    pathVariants.add(match.pathVariant);
+                }
+
+                // Parse and collect 95th percentile value
+                List<Double> percentile95Values = new ArrayList<>();
+                try {
+                    if (!row.percentile95.isEmpty()) {
+                        String p95Str = row.percentile95.replace("\"", "").replace(",", "");
+                        double p95Value = Double.parseDouble(p95Str);
+                        percentile95Values.add(p95Value);
+                    }
+                } catch (NumberFormatException ignored) {}
+
+                results.merge(
+                    replacementPattern,
+                    new AggregationResult(row.apiName, replacementPattern, row.apiTph, 1, 
+                                        ids, pathVariants, match.allDigits, percentile95Values),
+                    (existing, newValue) -> new AggregationResult(
+                        existing.originalPattern,
+                        existing.replacementPattern,
+                        existing.sum + newValue.sum,
+                        existing.count + 1,
+                        new HashSet<String>() {{
+                            addAll(existing.allIds);
+                            addAll(newValue.allIds);
+                        }},
+                        new HashSet<String>() {{
+                            addAll(existing.pathVariants);
+                            addAll(newValue.pathVariants);
+                        }},
+                        new HashSet<String>() {{
+                            addAll(existing.digits);
+                            addAll(newValue.digits);
+                        }},
+                        new ArrayList<Double>() {{
+                            addAll(existing.percentile95Values);
+                            addAll(newValue.percentile95Values);
+                        }}
+                    )
+                );
+                break;
+            }
+        }
+
+    private static void writeResults(String outputFile, Map<String, AggregationResult> results, 
+                                   List<CsvRow> skippedRows, List<String> invalidLines) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
+            writer.write("API_Name,API_TPH,Min_RT,Avg_RT,90th Percentile,95th Percentile,Max_RT\n");
+
+            // Write skipped rows with all columns
+            for (CsvRow row : skippedRows) {
+                writer.write(String.format("%s,%.2f,%s,%s,%s,%s,%s\n",
+                    escapeCsvField(row.apiName),
+                    row.apiTph,
+                    escapeCsvField(row.minRt),
+                    escapeCsvField(row.avgRt),
+                    escapeCsvField(row.percentile90),
+                    escapeCsvField(row.percentile95),
+                    escapeCsvField(row.maxRt)
+                ));
+            }
+
+            // Write pattern matches with calculated 95th percentile
+            for (AggregationResult result : results.values()) {
+                double calculated95thPercentile = calculate95thPercentile(result.percentile95Values);
+                writer.write(String.format("%s,%.2f,,,,%s,\n",
+                    escapeCsvField(result.replacementPattern),
+                    result.sum,
+                    String.format("%.3f", calculated95thPercentile)  // Format with 3 decimal places
+                ));
+            }
+        }
+    }
