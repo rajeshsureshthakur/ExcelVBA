@@ -1,0 +1,154 @@
+// ... (previous code remains same until processCSVFile method)
+
+    public static class CsvRow {
+        public final String apiName;
+        public final double apiTph;
+        public final String minRt;
+        public final String avgRt;
+        public final String percentile90;
+        public final String percentile95;
+        public final String maxRt;
+
+        public CsvRow(String apiName, double apiTph, String minRt, String avgRt, 
+                     String percentile90, String percentile95, String maxRt) {
+            this.apiName = apiName;
+            this.apiTph = apiTph;
+            this.minRt = minRt;
+            this.avgRt = avgRt;
+            this.percentile90 = percentile90;
+            this.percentile95 = percentile95;
+            this.maxRt = maxRt;
+        }
+
+        public static CsvRow fromLine(String line) {
+            String[] parts = line.split(",", -1);
+            String apiName = parts[0].trim();
+            double apiTph = 0.0;
+            try {
+                String tphStr = parts[1].trim().replace(",", "");
+                apiTph = Double.parseDouble(tphStr);
+            } catch (Exception e) {
+                // Keep default 0.0 if parsing fails
+            }
+            
+            String minRt = parts.length > 2 ? parts[2].trim() : "";
+            String avgRt = parts.length > 3 ? parts[3].trim() : "";
+            String p90 = parts.length > 4 ? parts[4].trim() : "";
+            String p95 = parts.length > 5 ? parts[5].trim() : "";
+            String maxRt = parts.length > 6 ? parts[6].trim() : "";
+
+            return new CsvRow(apiName, apiTph, minRt, avgRt, p90, p95, maxRt);
+        }
+    }
+
+    public static Map<String, AggregationResult> processCSVFile(String inputFile, String outputFile) throws IOException {
+        // ... (previous pattern definitions remain same)
+
+        Map<String, AggregationResult> results = new HashMap<>();
+        List<CsvRow> skippedRows = new ArrayList<>();
+        List<String> invalidLines = new ArrayList<>();
+
+        List<String> lines = Files.readAllLines(Paths.get(inputFile));
+        boolean isFirstLine = true;
+
+        for (String line : lines) {
+            if (isFirstLine) {
+                isFirstLine = false;
+                continue;
+            }
+
+            try {
+                CsvRow row = CsvRow.fromLine(line);
+                boolean matched = false;
+
+                for (PatternMatcher matcher : patterns) {
+                    if (matcher.matches(row.apiName)) {
+                        matched = true;
+                        MatchResult match = matcher.extractComponents(row.apiName);
+                        if (match == null) continue;
+
+                        String replacementPattern = matcher.getReplacement(match);
+
+                        Set<String> ids = new HashSet<>();
+                        if (!match.id.isEmpty()) ids.add(match.id);
+                        if (!match.secondId.isEmpty()) ids.add(match.secondId);
+
+                        Set<String> pathVariants = new HashSet<>();
+                        if (!match.pathVariant.isEmpty()) {
+                            pathVariants.add(match.pathVariant);
+                        }
+
+                        Set<String> digits = new HashSet<>();
+                        if (!match.digits.isEmpty()) {
+                            digits.add(match.digits);
+                        }
+                        if (!match.secondDigits.isEmpty()) {
+                            digits.add(match.secondDigits);
+                        }
+
+                        results.merge(
+                            replacementPattern,
+                            new AggregationResult(row.apiName, replacementPattern, row.apiTph, 1, ids, pathVariants, digits),
+                            (existing, newValue) -> new AggregationResult(
+                                existing.originalPattern,
+                                existing.replacementPattern,
+                                existing.sum + newValue.sum,
+                                existing.count + 1,
+                                new HashSet<String>() {{
+                                    addAll(existing.allIds);
+                                    addAll(newValue.allIds);
+                                }},
+                                new HashSet<String>() {{
+                                    addAll(existing.pathVariants);
+                                    addAll(newValue.pathVariants);
+                                }},
+                                new HashSet<String>() {{
+                                    addAll(existing.digits);
+                                    addAll(newValue.digits);
+                                }}
+                            )
+                        );
+                        break;
+                    }
+                }
+                
+                if (!matched) {
+                    skippedRows.add(row);
+                }
+            } catch (Exception e) {
+                invalidLines.add("Error processing line: " + line);
+            }
+        }
+
+        writeResults(outputFile, results, skippedRows, invalidLines);
+        return results;
+    }
+
+    private static void writeResults(String outputFile, Map<String, AggregationResult> results, 
+                                   List<CsvRow> skippedRows, List<String> invalidLines) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
+            // Write header
+            writer.write("API_Name,API_TPH,Min_RT,Avg_RT,90th Percentile,95th Percentile,Max_RT\n");
+
+            // Write skipped rows first (all columns)
+            for (CsvRow row : skippedRows) {
+                writer.write(String.format("%s,%.2f,%s,%s,%s,%s,%s\n",
+                    escapeCsvField(row.apiName),
+                    row.apiTph,
+                    escapeCsvField(row.minRt),
+                    escapeCsvField(row.avgRt),
+                    escapeCsvField(row.percentile90),
+                    escapeCsvField(row.percentile95),
+                    escapeCsvField(row.maxRt)
+                ));
+            }
+
+            // Write pattern matches (only pattern and sum)
+            for (AggregationResult result : results.values()) {
+                writer.write(String.format("%s,%.2f,,,,,\n",
+                    escapeCsvField(result.replacementPattern),
+                    result.sum
+                ));
+            }
+        }
+    }
