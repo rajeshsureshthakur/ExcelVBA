@@ -1,0 +1,138 @@
+public static class AggregationResult {
+        private final String originalPattern;
+        private final String replacementPattern;
+        private final double sum;
+        private final int count;
+        private final Set<String> allIds;
+        private final Set<String> pathVariants;
+        private final Set<String> digits;
+        private final List<Double> minRtValues;
+        private final List<Double> avgRtValues;
+        private final List<Double> percentile90Values;
+        private final List<Double> percentile95Values;
+        private final List<Double> maxRtValues;
+
+        public AggregationResult(String originalPattern, String replacementPattern, double sum, int count, 
+                               Set<String> allIds, Set<String> pathVariants, Set<String> digits,
+                               List<Double> minRtValues, List<Double> avgRtValues,
+                               List<Double> percentile90Values, List<Double> percentile95Values,
+                               List<Double> maxRtValues) {
+            this.originalPattern = originalPattern;
+            this.replacementPattern = replacementPattern;
+            this.sum = sum;
+            this.count = count;
+            this.allIds = allIds != null ? allIds : new HashSet<>();
+            this.pathVariants = pathVariants != null ? pathVariants : new HashSet<>();
+            this.digits = digits != null ? digits : new HashSet<>();
+            this.minRtValues = minRtValues != null ? minRtValues : new ArrayList<>();
+            this.avgRtValues = avgRtValues != null ? avgRtValues : new ArrayList<>();
+            this.percentile90Values = percentile90Values != null ? percentile90Values : new ArrayList<>();
+            this.percentile95Values = percentile95Values != null ? percentile95Values : new ArrayList<>();
+            this.maxRtValues = maxRtValues != null ? maxRtValues : new ArrayList<>();
+        }
+    }
+
+    // Helper method to parse number from string handling quotes and commas
+    private static double parseNumber(String value) {
+        try {
+            if (value == null || value.trim().isEmpty()) {
+                return 0.0;
+            }
+            String cleanValue = value.replace("\"", "").replace(",", "").trim();
+            return Double.parseDouble(cleanValue);
+        } catch (NumberFormatException e) {
+            return 0.0;
+        }
+    }
+
+    // Inside processCSVFile method, update the results.merge() call:
+    results.merge(
+        replacementPattern,
+        new AggregationResult(
+            row.apiName, replacementPattern, row.apiTph, 1, 
+            ids, pathVariants, match.allDigits,
+            Collections.singletonList(parseNumber(row.minRt)),
+            Collections.singletonList(parseNumber(row.avgRt)),
+            Collections.singletonList(parseNumber(row.percentile90)),
+            Collections.singletonList(parseNumber(row.percentile95)),
+            Collections.singletonList(parseNumber(row.maxRt))
+        ),
+        (existing, newValue) -> new AggregationResult(
+            existing.originalPattern,
+            existing.replacementPattern,
+            existing.sum + newValue.sum,
+            existing.count + 1,
+            new HashSet<String>() {{
+                addAll(existing.allIds);
+                addAll(newValue.allIds);
+            }},
+            new HashSet<String>() {{
+                addAll(existing.pathVariants);
+                addAll(newValue.pathVariants);
+            }},
+            new HashSet<String>() {{
+                addAll(existing.digits);
+                addAll(newValue.digits);
+            }},
+            new ArrayList<Double>() {{
+                addAll(existing.minRtValues);
+                addAll(newValue.minRtValues);
+            }},
+            new ArrayList<Double>() {{
+                addAll(existing.avgRtValues);
+                addAll(newValue.avgRtValues);
+            }},
+            new ArrayList<Double>() {{
+                addAll(existing.percentile90Values);
+                addAll(newValue.percentile90Values);
+            }},
+            new ArrayList<Double>() {{
+                addAll(existing.percentile95Values);
+                addAll(newValue.percentile95Values);
+            }},
+            new ArrayList<Double>() {{
+                addAll(existing.maxRtValues);
+                addAll(newValue.maxRtValues);
+            }}
+        )
+    );
+
+    // Update writeResults method:
+    private static void writeResults(String outputFile, Map<String, AggregationResult> results, 
+                                   List<CsvRow> skippedRows, List<String> invalidLines) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
+            writer.write("API_Name,API_TPH,Min_RT,Avg_RT,90th Percentile,95th Percentile,Max_RT\n");
+
+            // Write skipped rows with all columns
+            for (CsvRow row : skippedRows) {
+                writer.write(String.format("%s,%.2f,%s,%s,%s,%s,%s\n",
+                    escapeCsvField(row.apiName),
+                    row.apiTph,
+                    escapeCsvField(row.minRt),
+                    escapeCsvField(row.avgRt),
+                    escapeCsvField(row.percentile90),
+                    escapeCsvField(row.percentile95),
+                    escapeCsvField(row.maxRt)
+                ));
+            }
+
+            // Write pattern matches with all calculated 95th percentiles
+            for (AggregationResult result : results.values()) {
+                String minRt95th = String.format("%.3f", calculate95thPercentile(result.minRtValues));
+                String avgRt95th = String.format("%.3f", calculate95thPercentile(result.avgRtValues));
+                String p9095th = String.format("%.3f", calculate95thPercentile(result.percentile90Values));
+                String p9595th = String.format("%.3f", calculate95thPercentile(result.percentile95Values));
+                String maxRt95th = String.format("%.3f", calculate95thPercentile(result.maxRtValues));
+
+                writer.write(String.format("%s,%.2f,%s,%s,%s,%s,%s\n",
+                    escapeCsvField(result.replacementPattern),
+                    result.sum,
+                    minRt95th,
+                    avgRt95th,
+                    p9095th,
+                    p9595th,
+                    maxRt95th
+                ));
+            }
+        }
+    }
