@@ -1,0 +1,110 @@
+public static class CsvRow {
+        public final String apiName;
+        public final double apiTph;
+        public final String minRt;
+        public final String avgRt;
+        public final String percentile90;
+        public final String percentile95;
+        public final String maxRt;
+
+        public CsvRow(String apiName, double apiTph, String minRt, String avgRt, 
+                     String percentile90, String percentile95, String maxRt) {
+            this.apiName = apiName;
+            this.apiTph = apiTph;
+            this.minRt = minRt;
+            this.avgRt = avgRt;
+            this.percentile90 = percentile90;
+            this.percentile95 = percentile95;
+            this.maxRt = maxRt;
+        }
+
+        public static CsvRow parseLine(String line) {
+            List<String> tokens = new ArrayList<>();
+            StringBuilder sb = new StringBuilder();
+            boolean inQuotes = false;
+            
+            for (int i = 0; i < line.length(); i++) {
+                char c = line.charAt(i);
+                
+                if (c == '"') {
+                    inQuotes = !inQuotes;
+                } else if (c == ',' && !inQuotes) {
+                    tokens.add(sb.toString().trim());
+                    sb.setLength(0);
+                } else {
+                    sb.append(c);
+                }
+            }
+            tokens.add(sb.toString().trim());
+
+            // Parse values
+            String apiName = tokens.get(0);
+            double apiTph = 0.0;
+
+            try {
+                // Handle quoted number with commas
+                String tphStr = tokens.get(1);
+                if (tphStr.startsWith("\"") && tphStr.endsWith("\"")) {
+                    tphStr = tphStr.substring(1, tphStr.length() - 1);
+                }
+                // Remove commas and parse
+                tphStr = tphStr.replace(",", "");
+                apiTph = Double.parseDouble(tphStr);
+            } catch (Exception e) {
+                // Keep default 0.0 if parsing fails
+            }
+
+            // Get remaining columns, preserving original format
+            String minRt = tokens.size() > 2 ? tokens.get(2) : "";
+            String avgRt = tokens.size() > 3 ? tokens.get(3) : "";
+            String p90 = tokens.size() > 4 ? tokens.get(4) : "";
+            String p95 = tokens.size() > 5 ? tokens.get(5) : "";
+            String maxRt = tokens.size() > 6 ? tokens.get(6) : "";
+
+            return new CsvRow(apiName, apiTph, minRt, avgRt, p90, p95, maxRt);
+        }
+
+        @Override
+        public String toString() {
+            return String.format("%s,%.2f,%s,%s,%s,%s,%s",
+                escapeCsvField(apiName),
+                apiTph,
+                minRt,
+                avgRt,
+                percentile90,
+                percentile95,
+                maxRt
+            );
+        }
+    }
+
+    // Update the processCSVFile method to use the new parser:
+    public static Map<String, AggregationResult> processCSVFile(String inputFile, String outputFile) throws IOException {
+        // ... (previous code remains same until the line processing)
+
+        for (String line : lines) {
+            if (isFirstLine) {
+                isFirstLine = false;
+                continue;
+            }
+
+            try {
+                CsvRow row = CsvRow.parseLine(line);
+                // ... (rest of the processing remains same)
+            } catch (Exception e) {
+                invalidLines.add("Error processing line: " + line);
+            }
+        }
+
+        // ... (rest of the method remains same)
+    }
+
+    private static String escapeCsvField(String field) {
+        if (field != null) {
+            if (field.contains(",") || field.contains("\"") || field.contains("\n")) {
+                return "\"" + field.replace("\"", "\"\"") + "\"";
+            }
+            return field;
+        }
+        return "";
+    }
