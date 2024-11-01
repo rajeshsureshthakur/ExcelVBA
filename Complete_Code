@@ -313,3 +313,60 @@ public class URLPatternAggregator {
         }
     }
 }
+
+
+
+
+public static class CsvRow {
+        public final String apiName;
+        public final double apiTph;
+        public final String minRt;
+        public final String avgRt;
+        public final String percentile90;
+        public final String percentile95;
+        public final String maxRt;
+
+        public CsvRow(String apiName, double apiTph, String minRt, String avgRt, 
+                     String percentile90, String percentile95, String maxRt) {
+            this.apiName = apiName;
+            this.apiTph = apiTph;
+            this.minRt = minRt;
+            this.avgRt = avgRt;
+            this.percentile90 = percentile90;
+            this.percentile95 = percentile95;
+            this.maxRt = maxRt;
+        }
+
+        public static CsvRow fromLine(String line) {
+            // First split by first comma to get API name
+            int firstCommaIndex = line.indexOf(',');
+            if (firstCommaIndex == -1) {
+                return new CsvRow(line.trim(), 0.0, "", "", "", "", "");
+            }
+
+            String apiName = line.substring(0, firstCommaIndex).trim();
+            String remainder = line.substring(firstCommaIndex + 1);
+
+            // Now split rest of the line
+            String[] parts = remainder.split(",", -1);
+            
+            // Parse TPH value (handle numbers with commas)
+            double apiTph = 0.0;
+            try {
+                String tphStr = parts[0].trim();
+                // Remove all commas from the number
+                tphStr = tphStr.replaceAll(",", "");
+                apiTph = Double.parseDouble(tphStr);
+            } catch (Exception e) {
+                // Keep default 0.0 if parsing fails
+            }
+            
+            String minRt = parts.length > 1 ? parts[1].trim() : "";
+            String avgRt = parts.length > 2 ? parts[2].trim() : "";
+            String p90 = parts.length > 3 ? parts[3].trim() : "";
+            String p95 = parts.length > 4 ? parts[4].trim() : "";
+            String maxRt = parts.length > 5 ? parts[5].trim() : "";
+
+            return new CsvRow(apiName, apiTph, minRt, avgRt, p90, p95, maxRt);
+        }
+    }
